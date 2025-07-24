@@ -1,0 +1,29 @@
+def int a = 0;
+def int b = 0x0;
+state TrafficLight {
+    state InService {
+        state Red {
+            during {
+                a = 0x1 << 2;
+            }
+        }
+        state Yellow;
+        enter {
+            a = 0;
+            b = 0;
+        }
+        enter abstract InServiceAbstractEnter /*
+            Abstract Operation
+        */
+        [*] -> Red :: Start effect {
+            b = 0x1;
+        }
+        Red -> Green effect {
+            b = 0x3;
+        }
+    }
+    state Idle;
+    [*] -> InService;
+    InService -> Idle :: Maintain;
+    ! * -> Idle : if [a >= 20];
+}

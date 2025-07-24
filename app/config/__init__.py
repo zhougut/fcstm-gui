@@ -1,0 +1,1 @@
+from .meta import PLANTUML_JAR_PATH

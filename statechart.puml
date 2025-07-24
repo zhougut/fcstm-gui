@@ -1,0 +1,5 @@
+@startuml
+title 1234
+state "³õÊ¼×´Ì¬" as ³õÊ¼×´Ì¬ {
+}
+@enduml

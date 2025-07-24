@@ -1,0 +1,4 @@
+state start {
+    state sub_state1;
+    [*] -> sub_state1 : event1;
+}
