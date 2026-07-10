@@ -3,13 +3,16 @@ import os
 
 def find_and_remove_forced_transitions(text):
     """
-    从文本中识别以! 开头的强制转移块，并获取该强制转移块所在的状态，然后删除该强制转移块
+    从文本中识别以! 开头的强制转移块，并获取该强制转移块所在的状态路径，然后删除该强制转移块
     
     Args:
         text (str): 包含状态机定义的文本
         
     Returns:
         tuple: (强制转移列表, 删除强制转移后的文本)
+        强制转移列表中每项包含：
+        - 'state': 状态的完整路径（如 'TrafficLight.InService'）
+        - 'block': 强制转移的代码块
     """
     # 用于存储结果
     forced_transitions = []
@@ -67,16 +70,16 @@ def find_and_remove_forced_transitions(text):
 
 def parse_state_structure(lines):
     """
-    解析状态机结构，构建状态树和行到状态的映射
+    解析状态机结构，构建状态树和行到状态路径的映射
     
     Args:
         lines (list): 文本行列表
         
     Returns:
-        tuple: (状态树, 行号到状态的映射)
+        tuple: (状态树, 行号到状态路径的映射)
     """
     state_stack = []
-    line_to_state = {}  # 映射行号到状态名
+    line_to_state = {}  # 映射行号到状态路径
     state_tree = {}  # 状态树结构
     
     # 跟踪大括号嵌套层级
@@ -90,9 +93,11 @@ def parse_state_structure(lines):
             state_stack.append(state_name)
             brace_stack.append('state')
         
-        # 记录当前行所在的状态
+        # 记录当前行所在的状态路径
         if state_stack:
-            line_to_state[i] = state_stack[-1]
+            # 构建状态路径，用点号分隔
+            state_path = '.'.join(state_stack)
+            line_to_state[i] = state_path
         
         # 检查大括号开始（非状态定义）
         if '{' in line:

@@ -35,7 +35,7 @@ class DialogShowGraph(QDialog, UIDialogShowGraph):
         QDialog.__init__(self, parent)
         self.setupUi(self)
         self.state_manager = state_manager
-
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
         self.temp_png_path = os.path.join(tempfile.gettempdir(), 'temp_state_graph.png')
         
         # 创建自定义的CustomGraphicsView并添加到widget容器中

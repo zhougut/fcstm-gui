@@ -1,58 +1,120 @@
-//变量定义
-def int a = 0;
-def int b = 0x0;
-def int round_count = 0;
+def int y = 0;
+def int R_mt = 0;
+def int h_pr_switch = 0;
+def int h = 0;
 //状态定义
-state TrafficLight {
-    state InService {
-        enter {
-            a = 0;
-            b = 0;
-            round_count = 0;
-        }
-        enter abstract InServiceAbstractEnter /*
-            Abstract Operation When Entering State 'InService'
-            TODO: Should be Implemented In Generated Code Framework
-        */
-        during before abstract InServiceBeforeEnterChild /*
-            Abstract Operation Before Entering Child States of State 'InService'
-            TODO: Should be Implemented In Generated Code Framework
-        */
-        during after abstract InServiceAfterEnterChild /*
-            Abstract Operation After Entering Child States of State 'InService'
-            TODO: Should be Implemented In Generated Code Framework
-        */
-        exit abstract InServiceAbstractExit /*
-            Abstract Operation When Leaving State 'InService'
-            TODO: Should be Implemented In Generated Code Framework
-        */
-        state Red {
-            during {
-                a = 0x1 << 2;
+state FlightControl {
+    state IDLE;
+    state Control {
+        state FlightMode {
+            state Stabilize;
+            state EngineIgition {
+                enter {
+                    //启动发动机点火程序
+                }
             }
+            state RouteHy;
+            state SeekerOn {
+                enter {
+                    //启动导引头控制
+                }
+            }
+            state Attack {
+                enter {
+                    //发出航向导引控制指令
+                }
+                during {
+                    //判断并发出偏仰导引控制指令
+                }
+            }
+            [*] -> Stabilize;
+            //在给的模型中还有另一个转移：Stabilize -> EngineIgition : when [y < 2100];
+            Stabilize -> EngineIgition : if [y < 2100];
+            EngineIgition -> RouteHy :: Ctl_Event_EngineStable;
+            //在给的模型中是另一个转移：RouteHy -> SeekerOn :: when [R_mt < 5000];，因为违反语法，我改成了RouteHy -> SeekerOn :: if [R_mt < 5000];
+            RouteHy -> SeekerOn : if [R_mt < 5000];
+            SeekerOn -> Attack :: Ctl_Event_RoolarStable;
         }
-        state Yellow;
-        state Green;
-        [*] -> Red :: Start effect {
-            b = 0x1;
+
+        state PitchChannel {
+            state Failing {
+                enter {
+                    //启动角度角速度控制
+                }
+            }
+
+            state PullUp {
+                enter {
+                    //切换程序角
+                }
+            }
+
+            state HeightControl {
+                state LevelOff {
+                    enter {
+                        //开始平飞
+                    }
+                }
+
+                state Maneuver {
+                    enter {
+                        //开始高度机动
+                    }
+                }
+                [*] -> LevelOff;
+                LevelOff -> Maneuver :: Ctl_Command_HeightManeuver;
+                Maneuver -> LevelOff :: Ctl_Event_ManeuverFinished;
+            }
+
+            state Guidance {
+                enter {
+                    //启动俯仰导引控制
+                }
+            }
+            [*] -> Failing :: /calZetaSwitchAndPro;
+            //在给的模型中还有另一个转移：Failing -> PullUp : when [h < h_pr_switch];
+            Failing -> PullUp : if [h < h_pr_switch];
+            PullUp -> HeightControl :: Ctl_Event_EngineStable;
+            HeightControl -> Guidance :: Ctl_Command_PitchGuidance;
         }
-        Red -> Green effect {
-            b = 0x3;
+
+        state HeadingChannel {
+            state AngleStable;
+
+            state FirstRoutePointTurning {
+                enter {
+                    //启动航向角转弯控制
+                }
+            }
+
+            state LineFly {
+                enter {
+                    //启动直飞控制
+                }
+            }
+
+            state Turning {
+                enter {
+                    //启动转弯控制
+                }
+            }
+
+            state Guidance {
+                enter {
+                    //启动航向导引控制
+                }
+            }
+            [*] -> AngleStable;
+            AngleStable -> FirstRoutePointTurning :: Ctl_Event_EngineStable;
+            FirstRoutePointTurning -> LineFly :: Ctl_Event_TurningFinishedLineFly;
+            LineFly -> Turning :: Ctl_Event_Turning;
+            Turning -> LineFly :: Ctl_Event_Finished;
+            LineFly -> Guidance :: Ctl_Command_YawGuidance;
         }
-        Green -> Yellow effect {
-            b = 0x2;
-        }
-        Yellow -> Red : if [a >= 10] effect {
-            b = 0x1;
-            round_count = round_count + 1;
-        }
+
+        //Control中的三个子状态FlightMode，PitchChannel，HeadingChannel应该是并行运行的
+        [*] -> FlightMode;
     }
-    state Idle;
-    ! * -> Idle if [a >= 20];
-    ! Idle -> InService if [a >= 30] effect {
-        a = 0;
-    }
-    [*] -> InService;
-    InService -> Idle :: Maintain;
-    Idle -> [*];
+    [*] -> IDLE;
+    IDLE -> Control;
 }

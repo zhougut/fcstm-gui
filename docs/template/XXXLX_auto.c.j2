@@ -1,0 +1,225 @@
+#include "XXXLX_auto.h"
+
+#include <stdio.h>
+
+#include "FSM_Step.h"
+#include "XXXLX_extra.h"
+#include "tpDef.h"
+
+// Model Structure Overview:
+{{ indent(str(model.to_ast_node()), '// ') }}
+{% for state in model.walk_states() %}
+CST_FSM_Para_Base {{ state | get_state_id }};  // {{ state | get_state_name }}{% endfor %}
+
+CST_FSM_Vars LX_Vars;  // Variables In State Machine
+
+static void FSM_Vars_Init(CST_FSM_Vars* vars)
+{ {% for def_item in model.defines.values() %}
+    vars->{{ def_item.name }} = {{ def_item.init() | expr_render }};{% endfor %}
+}
+
+{% for state in model.walk_states() %}
+// {{ state | get_state_name }} {% if state.is_root_state %}(Root){% else %}(Parent: {{ state.parent | get_state_name }}){% endif %}
+#define {{ state | get_state_entry_num_name }} 1
+#define {{ state | get_state_during_num_name }} {{ 1 if state.is_leaf_state else 3 }}
+#define {{ state | get_state_event_num_name }} {% if len(state.transitions_from) >= 1 %}{{ len(state.transitions_from) }}{% else %}1{% endif %}
+#define {{ state | get_state_exit_num_name }} 1
+void (*{{ state | get_state_entry_name }}[{{ state | get_state_entry_num_name }}])(XXX_FSM_PARAS_DECLARE);
+INT32S (*{{ state | get_state_during_name }}[{{ state | get_state_during_num_name }}])(XXX_FSM_PARAS_DECLARE);
+INT32S (*{{ state | get_state_event_name }}[{{ state | get_state_event_num_name }}])(XXX_FSM_PARAS_DECLARE);
+void (*{{ state | get_state_exit_name }}[{{ state | get_state_exit_num_name }}])(XXX_FSM_PARAS_DECLARE);
+{% if len(state.substates) > 0 %}
+#define {{ state | get_state_sub_num_name }} {{ len(state.substates) }}
+CST_FSM_Para_Base* {{ state | get_state_sub_name }}[{{ state | get_state_sub_num_name }}];
+{% endif %}
+
+{% for id, during in state.list_on_during_aspects(is_abstract=False, with_ids=True) %}void {{ get_during_aspect_fn_name(state, during, id) }}(XXX_FSM_PARAS_DECLARE)
+{
+    // During Operation Aspect ({{ during.aspect.capitalize() }} Excuting Leaf) {{ during.name or "Unnamed_" + str(id) }} of State {{ state | get_state_name }}
+{{ indent(str(during.to_ast_node()), "    // ") }}    
+    {% for operation in during.operations %}
+    {{ operation.var_name_to_ast_node() | expr_render }} = {{ operation.expr.to_ast_node() | expr_render }};{% endfor %}
+}
+{% endfor %}
+
+void {{ state | get_state_entry_hook_name }}(XXX_FSM_PARAS_DECLARE)
+{
+    // Entry Processes Current State {{ state | get_state_name }}
+    {% for id, enter in state.list_on_enters(with_ids=True) %}
+    {{ get_enter_fn_name(state, enter, id) }}(pPara_io, XXX_FSM_PARAS);{% endfor %}
+}
+
+{% for id, enter in state.list_on_enters(is_abstract=False, with_ids=True) %}void {{ get_enter_fn_name(state, enter, id) }}(XXX_FSM_PARAS_DECLARE)
+{
+    // Non-Abstract Operation {{ enter.name or "Unnamed_" + str(id) }} At Entry Of State {{ state | get_state_name }}
+{{ indent(str(enter.to_ast_node()), "    // ") }}
+    {% for operation in enter.operations %}
+    {{ operation.var_name_to_ast_node() | expr_render }} = {{ operation.expr.to_ast_node() | expr_render }};{% endfor %}
+}
+{% endfor %}
+
+{% if state.is_leaf_state %}
+INT32S {{ state | get_state_during_leaf_hook_name }}(XXX_FSM_PARAS_DECLARE)
+{
+    // During Processes Current Leaf State {{ state | get_state_name }}
+    {% for id, curstate, during in state.list_on_during_aspect_recursively(with_ids=True) %}
+    {{ get_during_leaf_fn_name(curstate, during, id) }}(pPara_io, XXX_FSM_PARAS);{% endfor %}
+    return NO_NEED_TO_BREAK;
+}
+
+{% for id, during in state.list_on_durings(is_abstract=False, with_ids=True) %}
+void {{ get_during_fn_name(state, during, id) }}(XXX_FSM_PARAS_DECLARE)
+{
+    // Non-Abstract Operation {{ during.name or "Unnamed_" + str(id) }} During State {{ state | get_state_name }}
+{{ indent(str(during.to_ast_node()), "    // ") }}
+    {% for operation in during.operations %}
+    {{ operation.var_name_to_ast_node() | expr_render }} = {{ operation.expr.to_ast_node() | expr_render }};{% endfor %}
+}
+{% endfor %}
+
+{% else %}
+INT32S {{ state | get_state_during_before_hook_name }}(XXX_FSM_PARAS_DECLARE)
+{
+    // During Processes Before Getting Into Children State of State {{ state | get_state_name }}
+    {% for id, during in state.list_on_durings(aspect='before', with_ids=True) %}
+    {{ get_during_fn_name(state, during, id) }}(pPara_io, XXX_FSM_PARAS);{% endfor %}
+    return NO_NEED_TO_BREAK;
+}
+
+INT32S {{ state | get_state_during_enter_child_hook_name }}(XXX_FSM_PARAS_DECLARE)
+{
+    // Children State Entry Selector of State {{ state | get_state_name }}
+    {% for transition in state.transitions_entering_children_simplified %}{% if transition == None %}
+    // When None Of The Transitions Triggered
+    return NO_NEED_TO_BREAK;{% elif transition.event != None %}
+{{ indent(str(transition.to_ast_node()), "    // ") }}
+    if ({{ get_event_trigger_fn_name(state, transition.event) }}(pPara_io, XXX_FSM_PARAS) == BTRUE) {
+        return {{ get_break_to_substate(state, transition) }};
+    }{% elif transition.guard != None %}
+{{ indent(str(transition.to_ast_node()), "    // ") }}
+    if ({{ transition.guard.to_ast_node() | expr_render }})
+    {
+        return {{ get_break_to_substate(state, transition) }};
+    }{% else %}
+{{ indent(str(transition.to_ast_node()), "    // ") }}
+    return {{ get_break_to_substate(state, transition) }};{% endif %}{% endfor %}
+}
+
+INT32S {{ state | get_state_during_after_hook_name }}(XXX_FSM_PARAS_DECLARE)
+{
+    // During Processes After Getting Back From Children State of State {{ state | get_state_name }}
+    {% for id, during in state.list_on_durings(aspect='after', with_ids=True) %}
+    {{ get_during_fn_name(state, during, id) }}(pPara_io, XXX_FSM_PARAS);{% endfor %}
+    return NO_NEED_TO_BREAK;
+}
+
+{% for id, during in state.list_on_durings(is_abstract=False, with_ids=True) %}void {{ get_during_fn_name(state, during, id) }}(XXX_FSM_PARAS_DECLARE)
+{
+    // Non-Abstract Operation {{ during.name or "Unnamed_" + str(id) }} During State {{ state | get_state_name }}
+{{ indent(str(during.to_ast_node()), "    // ") }}
+    {% for operation in during.operations %}
+    {{ operation.var_name_to_ast_node() | expr_render }} = {{ operation.expr.to_ast_node() | expr_render }};{% endfor %}
+}
+{% endfor %}
+
+{% endif %}
+
+{% if len(state.transitions_from) >= 1 %}
+{% for id, transition in enumerate(state.transitions_from) %}
+#define {{ get_state_event_signal_name(state, id) }} ({{ id + 1 }})
+INT32S {{ get_state_event_hook_name(state, id) }}(XXX_FSM_PARAS_DECLARE)
+{
+    // Transition Trigger Checker of Transition (Event #{{ id + 1 }}):
+{{ indent(str(transition.to_ast_node()), "    // ") }}
+    {% if transition.event != None %}
+    if ({{ get_event_trigger_fn_name(state, transition.event) }}(pPara_io, XXX_FSM_PARAS) == BTRUE)
+    {
+        return {{ get_exit_to_x(state, transition) }};
+    }
+    return EVENT_NOT_TRIGGERED;{% elif transition.guard != None %}
+    if ({{ transition.guard.to_ast_node() | expr_render }})
+    {
+        return {{ get_exit_to_x(state, transition) }};
+    }
+    return EVENT_NOT_TRIGGERED;{% else %}
+    return {{ get_exit_to_x(state, transition) }};
+    {% endif %}
+}
+{% endfor %}
+{% else %}
+INT32S {{ state | get_state_event_empty_hook_name }}(XXX_FSM_PARAS_DECLARE)
+{
+    return EVENT_NOT_TRIGGERED;
+}{% endif %}
+
+void {{ state | get_state_exit_hook_name }}(XXX_FSM_PARAS_DECLARE)
+{
+    // Exit Processes Current State {{ state | get_state_name }}
+    {% for id, exit in state.list_on_exits(with_ids=True) %}
+    {{ get_exit_fn_name(state, exit, id) }}(pPara_io, XXX_FSM_PARAS);{% endfor %}
+    {{ state | get_state_exit_effect_name }}(pPara_io, XXX_FSM_PARAS);
+}
+
+{% for id, exit in state.list_on_exits(is_abstract=False, with_ids=True) %}void {{ get_exit_fn_name(state, exit, id) }}(XXX_FSM_PARAS_DECLARE)
+{
+    // Non-Abstract Operation {{ exit.name or "Unnamed_" + str(id) }} At Exit Of State {{ state | get_state_name }}
+{{ indent(str(exit.to_ast_node()), "    // ") }}
+    {% for operation in exit.operations %}
+    {{ operation.var_name_to_ast_node() | expr_render }} = {{ operation.expr.to_ast_node() | expr_render }};{% endfor %}
+}
+{% endfor %}
+
+void {{ state | get_state_exit_effect_name }}(XXX_FSM_PARAS_DECLARE)
+{
+    // Effects Of the Transitions Exiting From State {{ state | get_state_name }}
+    {% for id, transition in enumerate(state.transitions_from) %}{% if len(transition.effects) > 0 %}
+    if (pPara_io->TriggeredEvent == {{ get_state_event_signal_name(state, id) }})
+    {
+        // Transition Effect Of Event #{{ id + 1 }} Of State {{ state | get_state_name }}
+{{ indent(str(transition.to_ast_node()), "        // ") }}
+        {% for operation in transition.effects %}
+        {{ operation.var_name_to_ast_node() | expr_render }} = {{ operation.expr.to_ast_node() | expr_render }};{% endfor %}
+    }
+    {% endif %}{% endfor %}
+}
+
+{% endfor %}
+
+
+void FSM_Init()
+{
+    FSM_Vars_Init(&LX_Vars);
+
+{% for state in model.walk_states() %}
+#ifdef EMU_FSM_NAME
+    {{ state | get_state_id }}.Name = {{ state | get_state_name | tojson }};
+#endif
+    {{ state | get_state_id }}.ID = {{ state | get_state_id_symbol }};
+    {{ state | get_state_id }}.State = FSM_Idle;
+    {{ state | get_state_id }}.LastDuringIDX = 0;
+    {{ state | get_state_id }}.IsLeafState = {% if state.is_leaf_state %}BTRUE{% else %}BFALSE{% endif %};
+    {{ state | get_state_id }}.TriggeredEvent = NO_EVENT_TRIGGERED;
+    {{ state | get_state_id }}.Num_Entry = {{ state | get_state_entry_num_name }};
+    {{ state | get_state_id }}.Num_During = {{ state | get_state_during_num_name }};
+    {{ state | get_state_id }}.Num_Event = {{ state | get_state_event_num_name }};
+    {{ state | get_state_id }}.Num_Exit = {{ state | get_state_exit_num_name }};
+    {{ state | get_state_entry_name }}[0] = &{{ state | get_state_entry_hook_name }};{% if state.is_leaf_state %}
+    {{ state | get_state_during_name }}[0] = &{{ state | get_state_during_leaf_hook_name }};{% else %}
+    {{ state | get_state_during_name }}[0] = &{{ state | get_state_during_before_hook_name }};
+    {{ state | get_state_during_name }}[1] = &{{ state | get_state_during_enter_child_hook_name }};
+    {{ state | get_state_during_name }}[2] = &{{ state | get_state_during_after_hook_name }};{% endif %}{% if len(state.transitions_from) >= 1 %}{% for id, transition in enumerate(state.transitions_from) %}
+    {{ state | get_state_event_name }}[{{ id }}] = &{{ get_state_event_hook_name(state, id) }};{% endfor %} {% else %}
+    {{ state | get_state_event_name }}[0] = &{{ state | get_state_event_empty_hook_name }};{% endif %}
+    {{ state | get_state_exit_name }}[0] = &{{ state | get_state_exit_hook_name }};
+    {{ state | get_state_id }}.pFunc_Entry = &{{ state | get_state_entry_name }};
+    {{ state | get_state_id }}.pFunc_During = &{{ state | get_state_during_name }};
+    {{ state | get_state_id }}.pFunc_Event = &{{ state | get_state_event_name }};
+    {{ state | get_state_id }}.pFunc_Exit = &{{ state | get_state_exit_name }};{% if len(state.substates) > 0 %}
+    {{ state | get_state_id }}.Num_Sub = {{ state | get_state_sub_num_name }};{% for id, substate in enumerate(state.substates.values()) %}
+    {{ state | get_state_sub_name }}[{{ id }}] = &{{ substate | get_state_id }};{% endfor %}
+    {{ state | get_state_id }}.SubState = {{ state | get_state_sub_name }};{% else %}
+    {{ state | get_state_id }}.Num_Sub = 0;
+    {{ state | get_state_id }}.SubState = NULL;{% endif %}
+    {{ state | get_state_id }}.Extra = NULL;
+{% endfor %}
+}

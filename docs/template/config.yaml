@@ -1,0 +1,212 @@
+expr_styles:
+  default:
+    base_lang: c
+    Name: LX_Vars.{{ node.name }}
+
+ignores:
+  - '.git'
+  - 'README.md'
+  - '.vscode'
+  - '.gitignore'
+
+globals:
+  global_prefix: 'FSM_'
+  
+  # basic names
+  get_state_name_safe:
+    type: template
+    params:
+      - state
+    template: '{{ state.path | join("_") }}'
+  get_state_name:
+    type: template
+    params:
+      - state
+    template: '{{ state.path | join(".") }}'
+
+  # state function names (those defined in DSLs, e.g. event trigger condition, enter/during/exit block
+  get_event_trigger_fn_name:
+    type: template
+    params:
+      - state
+      - event
+    template: '{{ global_prefix }}{{ event.state_path | join("_") }}_Event_{{ event.name }}_Is_Triggered'
+  get_enter_fn_name:
+    type: template
+    params:
+      - state
+      - enter
+      - id
+    template: '{{ global_prefix }}{{ get_state_name_safe(state) }}_On_Enter_{{ enter.name or "Unnamed_" + str(id) }}'
+  get_during_fn_name:
+    type: template
+    params:
+      - state
+      - during
+      - id
+    template: '{{ global_prefix }}{{ get_state_name_safe(state) }}_On_During_{{ during.aspect.capitalize() + "_Enter_Child" if during.aspect else "Leaf" }}_{{ during.name or "Unnamed_" + str(id) }}'
+  get_exit_fn_name:
+    type: template
+    params:
+      - state
+      - exit
+      - id
+    template: '{{ global_prefix }}{{ get_state_name_safe(state) }}_On_Exit_{{ exit.name or "Unnamed_" + str(id) }}'
+  get_during_aspect_fn_name:
+    type: template
+    params:
+      - state
+      - during
+      - id
+    template: '{{ global_prefix }}{{ get_state_name_safe(state) }}_On_Aspect_{{ during.aspect.capitalize() }}_Excuting_Leaf_During_{{ during.name or "Unnamed_" + str(id) }}'
+  get_during_leaf_fn_name:
+    type: template
+    params:
+      - state
+      - during
+      - id
+    template: '{% if during.is_aspect %}{{ get_during_aspect_fn_name(state, during, id) }}{% else %}{{ get_during_fn_name(state, during, id) }}{% endif %}'
+  get_state_event_hook_name:
+    type: template
+    params:
+      - state
+      - id
+    template: '{{ global_prefix }}{{ get_state_name_safe(state) }}_Event_{{ id + 1 }}'
+  get_state_event_signal_name:
+    type: template
+    params:
+      - state
+      - id
+    template: '{{ get_state_event_hook_name(state, id) }}_Triggered'
+  get_break_to_substate:
+    type: template
+    params:
+      - state
+      - transition
+    template: 'BREAK_TO_SUBSTATE({{ state.substate_name_to_id[transition.to_state] }})'
+  get_exit_to_x:
+    type: template
+    params:
+      - state
+      - transition
+    template: '{% if transition.to_state == EXIT_STATE %}GO_TO_EXIT{% else %}GO_TO_COUSIN_STATE({{ state.parent.substate_name_to_id[transition.to_state] }}){% endif %}'
+
+filters:
+  # basic names
+  get_state_name_safe:
+    type: template
+    params:
+      - state
+    template: '{{ get_state_name_safe(state) }}'
+  get_state_name:
+    type: template
+    params:
+      - state
+    template: '{{ get_state_name(state) }}'
+
+  # state symbol names
+  get_state_id: # state node variable name
+    type: template
+    params:
+      - state
+    template: '{{ global_prefix }}{{ state | get_state_name_safe }}_{{ global_prefix }}L{{ state.path | len }}'
+  get_state_id_symbol: # state node ID enum name
+    type: template
+    params:
+      - state
+    template: '{{ global_prefix }}STATE_{{ state | get_state_name_safe }}_{{ global_prefix }}L{{ state.path | len }}_ID'
+
+  # basic macros
+  get_state_entry_num_name:
+    type: template
+    params:
+      - state
+    template: '{{ global_prefix }}{{ state | get_state_name_safe }}_Entry_Num'
+  get_state_during_num_name:
+    type: template
+    params:
+      - state
+    template: '{{ global_prefix }}{{ state | get_state_name_safe }}_During_Num'
+  get_state_event_num_name:
+    type: template
+    params:
+      - state
+    template: '{{ global_prefix }}{{ state | get_state_name_safe }}_Event_Num'
+  get_state_exit_num_name:
+    type: template
+    params:
+      - state
+    template: '{{ global_prefix }}{{ state | get_state_name_safe }}_Exit_Num'
+  get_state_sub_num_name:
+    type: template
+    params:
+      - state
+    template: '{{ global_prefix }}{{ state | get_state_name_safe }}_Sub_Num'
+
+  get_state_entry_name:
+    type: template
+    params:
+      - state
+    template: '{{ global_prefix }}{{ state | get_state_name_safe }}_Entry'
+  get_state_during_name:
+    type: template
+    params:
+      - state
+    template: '{{ global_prefix }}{{ state | get_state_name_safe }}_During'
+  get_state_event_name:
+    type: template
+    params:
+      - state
+    template: '{{ global_prefix }}{{ state | get_state_name_safe }}_Event'
+  get_state_exit_name:
+    type: template
+    params:
+      - state
+    template: '{{ global_prefix }}{{ state | get_state_name_safe }}_Exit'
+  get_state_sub_name:
+    type: template
+    params:
+      - state
+    template: '{{ global_prefix }}{{ state | get_state_name_safe }}_SubState'
+
+  # state hook function names
+  get_state_entry_hook_name:
+    type: template
+    params:
+      - state
+    template: '{{ global_prefix }}{{ state | get_state_name_safe }}_Entry_Func'
+  get_state_during_leaf_hook_name:
+    type: template
+    params:
+      - state
+    template: '{{ global_prefix }}{{ state | get_state_name_safe }}_During_Leaf'
+  get_state_during_before_hook_name:
+    type: template
+    params:
+      - state
+    template: '{{ global_prefix }}{{ state | get_state_name_safe }}_During_Before'
+  get_state_during_enter_child_hook_name:
+    type: template
+    params:
+      - state
+    template: '{{ global_prefix }}{{ state | get_state_name_safe }}_During_Enter_Child'
+  get_state_during_after_hook_name:
+    type: template
+    params:
+      - state
+    template: '{{ global_prefix }}{{ state | get_state_name_safe }}_During_After'
+  get_state_event_empty_hook_name:
+    type: template
+    params:
+      - state
+    template: '{{ global_prefix }}{{ state | get_state_name_safe }}_Event_Empty'
+  get_state_exit_hook_name:
+    type: template
+    params:
+      - state
+    template: '{{ global_prefix }}{{ state | get_state_name_safe }}_Exit_Func'
+  get_state_exit_effect_name:
+    type: template
+    params:
+      - state
+    template: '{{ global_prefix }}{{ state | get_state_name_safe }}_On_Exit__Effects'

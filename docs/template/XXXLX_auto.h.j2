@@ -1,0 +1,24 @@
+#ifndef _XXXLX_AUTO_H
+#define _XXXLX_AUTO_H
+
+#include "FSM_Step.h"
+
+// Model Structure Overview:
+{{ indent(str(model.to_ast_node()), '// ') }}
+{% for state in model.walk_states() %}
+extern CST_FSM_Para_Base {{ state | get_state_id }};  // {{ state | get_state_name }}{% endfor %}
+
+// 在状态机中使用的变量，需要在状态机模型中进行定义
+typedef struct CST_FSM_Vars
+{ {% for def_item in model.defines.values() %}
+    {{ "INT32S" if def_item.type == 'int' else 'FP32' }} {{ def_item.name }};{% endfor %}
+} CST_FSM_Vars;
+extern CST_FSM_Vars LX_Vars;
+
+typedef enum
+{
+    {{ global_prefix }}STATE_NULL_ID = 0,  // Empty State ID{% for id, state in enumerate(model.walk_states(), 1) %}
+    {{ state | get_state_id_symbol }} = {{ id | hex }},  // {{ state | get_state_name }}{% endfor %}
+} FSMStateID;
+
+#endif

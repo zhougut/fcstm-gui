@@ -1,0 +1,66 @@
+# Demo of Generated Code
+
+This is the state machine DSL code of this demo:
+
+```
+def int a = 0;
+def int b = 0;
+def int round_count = 0;
+state TrafficLight {
+    state InService {
+        enter {
+            a = 0;
+            b = 0;
+            round_count = 0;
+        }
+        enter abstract InServiceAbstractEnter /*
+            Abstract Operation When Entering State 'InService'
+            TODO: Should be Implemented In Generated Code Framework
+        */
+        during before abstract InServiceBeforeEnterChild /*
+            Abstract Operation Before Entering Child States of State 'InService'
+            TODO: Should be Implemented In Generated Code Framework
+        */
+        during after abstract InServiceAfterEnterChild /*
+            Abstract Operation After Entering Child States of State 'InService'
+            TODO: Should be Implemented In Generated Code Framework
+        */
+        exit abstract InServiceAbstractExit /*
+            Abstract Operation When Leaving State 'InService'
+            TODO: Should be Implemented In Generated Code Framework
+        */
+        state Red {
+            during {
+                a = 1 << 2;
+            }
+        }
+        state Yellow;
+        state Green;
+        Red -> [*] : if [a >= 20];
+        Yellow -> [*] : if [a >= 20];
+        Green -> [*] : if [a >= 20];
+        [*] -> Red :: Start effect {
+            b = 1;
+        }
+        Red -> Green effect {
+            b = 3;
+        }
+        Green -> Yellow effect {
+            b = 2;
+        }
+        Yellow -> Red : if [a >= 10] effect {
+            b = 1;
+            round_count = round_count + 1;
+        }
+    }
+    state Idle;
+    InService -> Idle : if [a >= 20];
+    Idle -> Idle : if [a >= 20];
+    Idle -> InService : if [a >= 30];
+    [*] -> InService;
+    InService -> Idle :: Maintain;
+    Idle -> [*];
+}
+```
+
+The generated code can be found in the other files here.

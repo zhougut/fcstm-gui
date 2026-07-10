@@ -1,0 +1,44 @@
+#include "XXXLX_extra.h"
+
+#include <stdio.h>
+
+#include "FSM_Step.h"
+#include "XXXLX_auto.h"
+#include "tpDef.h"
+
+// Model Structure Overview:
+{{ indent(str(model.to_ast_node()), '// ') }}
+{% for state in model.walk_states() %}{% if state.events or state.abstract_on_enters or state.abstract_on_durings or state.abstract_on_exits or state.abstract_on_during_aspects %}
+// {{ state | get_state_name }}
+{% for event in state.events.values() %}BOOLEAN {{ get_event_trigger_fn_name(state, event) }}(XXX_FSM_PARAS_DECLARE)
+{
+    // Event {{ event.name }} Triggered Check Function of State {{ state | get_state_name }}
+    // Return BTRUE when triggered, otherwise return BFALSE
+    // TODO: implement this operation function.
+    return BFALSE;
+}
+{% endfor %}{% for id, enter in state.list_on_enters(is_abstract=True, with_ids=True) %}void {{ get_enter_fn_name(state, enter, id) }}(XXX_FSM_PARAS_DECLARE)
+{
+    // Enter Operation {{ enter.name or "Unnamed_" + str(id) }} of State {{ state | get_state_name }}
+{{ indent(str(enter.to_ast_node()), "    // ") }}
+    // TODO: implement this enter operation function.
+}
+{% endfor %}{% for id, during in state.list_on_durings(is_abstract=True, with_ids=True) %}void {{ get_during_fn_name(state, during, id) }}(XXX_FSM_PARAS_DECLARE)
+{
+    // During Operation ({{ during.aspect.capitalize() + " Enter Child" if during.aspect else "Leaf" }}) {{ during.name or "Unnamed_" + str(id) }} of State {{ state | get_state_name }}
+{{ indent(str(during.to_ast_node()), "    // ") }}
+    // TODO: implement this during operation function.
+}
+{% endfor %}{% for id, exit in state.list_on_exits(is_abstract=True, with_ids=True) %}void {{ get_exit_fn_name(state, exit, id) }}(XXX_FSM_PARAS_DECLARE)
+{
+    // Exit Operation {{ exit.name or "Unnamed_" + str(id) }} of State {{ state | get_state_name }}
+{{ indent(str(exit.to_ast_node()), "    // ") }}
+    // TODO: implement this exit operation function.
+}
+{% endfor %}{% for id, during in state.list_on_during_aspects(is_abstract=True, with_ids=True) %}void {{ get_during_aspect_fn_name(state, during, id) }}(XXX_FSM_PARAS_DECLARE)
+{
+    // During Operation Aspect ({{ during.aspect.capitalize() }} Excuting Leaf) {{ during.name or "Unnamed_" + str(id) }} of State {{ state | get_state_name }}
+{{ indent(str(during.to_ast_node()), "    // ") }}
+    // TODO: implement this during operation aspect function.
+}
+{% endfor %}{% endif %}{% endfor %}
