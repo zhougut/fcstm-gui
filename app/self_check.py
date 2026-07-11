@@ -201,6 +201,102 @@ def _check_main_window():
     return 'constructed, shown, events processed, closed'
 
 
+_ACCEPTANCE_DSL = 'state Smoke { state Idle; [*] -> Idle; Idle -> [*]; }'
+
+
+def _invoke_pyfcstm(arguments, files=None):
+    from click.testing import CliRunner
+    from pyfcstm.entry.cli import cli
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        with open('acceptance.fcstm', 'w') as file:
+            file.write(_ACCEPTANCE_DSL)
+        result = runner.invoke(cli, arguments)
+        if result.exit_code != 0:
+            raise RuntimeError('pyfcstm {} failed: {}'.format(' '.join(arguments), result.output[-1000:]))
+        outputs = {}
+        for path in files or ():
+            if not os.path.isfile(path) or os.path.getsize(path) == 0:
+                raise RuntimeError('pyfcstm did not create non-empty ' + path)
+            with open(path, 'rb') as file:
+                outputs[path] = file.read()
+        return result.output, outputs
+
+
+def _check_invalid_diagnostics():
+    from click.testing import CliRunner
+    from pyfcstm.entry.cli import cli
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        with open('invalid.fcstm', 'w') as file:
+            file.write('state Broken { state ; }')
+        result = runner.invoke(cli, ['inspect', '-i', 'invalid.fcstm', '--format', 'json'])
+        if result.exit_code == 0 or not any(token in result.output.lower() for token in ('line', 'column', 'syntax', 'error')):
+            raise RuntimeError('invalid DSL did not produce positional diagnostics: ' + result.output[-500:])
+        return 'rejected with diagnostic output'
+
+
+def _check_inspect(format_name):
+    output, _ = _invoke_pyfcstm(['inspect', '-i', 'acceptance.fcstm', '--format', format_name, '--color', 'never'])
+    if 'Smoke' not in output:
+        raise RuntimeError(format_name + ' inspect omitted machine name')
+    return '{} chars'.format(len(output))
+
+
+def _check_template(template_name):
+    from click.testing import CliRunner
+    from pyfcstm.entry.cli import cli
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        with open('acceptance.fcstm', 'w') as file:
+            file.write(_ACCEPTANCE_DSL)
+        result = runner.invoke(cli, ['generate', '-i', 'acceptance.fcstm', '--template', template_name,
+                                     '-o', 'generated', '--clear'])
+        if result.exit_code != 0:
+            raise RuntimeError(template_name + ' generation failed: ' + result.output[-1000:])
+        generated = []
+        for root, _, names in os.walk('generated'):
+            generated.extend(os.path.join(root, name) for name in names if os.path.getsize(os.path.join(root, name)) > 0)
+        if not generated:
+            raise RuntimeError(template_name + ' template produced no non-empty files')
+        return '{} files'.format(len(generated))
+
+
+def _check_pyfcstm_plantuml_cli():
+    _, outputs = _invoke_pyfcstm(['plantuml', '-i', 'acceptance.fcstm', '-o', 'machine.puml'], ['machine.puml'])
+    if b'@startuml' not in outputs['machine.puml']:
+        raise RuntimeError('plantuml CLI output is invalid')
+    return '{} bytes'.format(len(outputs['machine.puml']))
+
+
+def _check_visualize(format_name):
+    output_name = 'machine.' + format_name
+    _, outputs = _invoke_pyfcstm(['visualize', '-i', 'acceptance.fcstm', '-o', output_name,
+                                 '--type', format_name, '--renderer', 'local',
+                                 '--plantuml-jar', _plantuml_path(), '--no-open'], [output_name])
+    magic = {'png': b'\x89PNG', 'svg': b'<?xml', 'pdf': b'%PDF'}[format_name]
+    if not outputs[output_name].startswith(magic):
+        raise RuntimeError(format_name + ' visualization has incorrect magic')
+    return '{} bytes'.format(len(outputs[output_name]))
+
+
+def _check_simulate_cli():
+    output, _ = _invoke_pyfcstm(['simulate', '-i', 'acceptance.fcstm', '--execute', 'current', '--no-color'])
+    if 'Idle' not in output and 'Smoke' not in output:
+        raise RuntimeError('batch simulation produced no state output: ' + output[-500:])
+    return '{} chars'.format(len(output))
+
+
+def _check_pygments_highlight():
+    from pygments import highlight
+    from pygments.formatters import HtmlFormatter
+    from pyfcstm.highlight.pygments_lexer import FcstmLexer
+    output = highlight(_ACCEPTANCE_DSL, FcstmLexer(), HtmlFormatter())
+    if 'Smoke' not in output or '<span' not in output:
+        raise RuntimeError('FCSTM Pygments highlighting failed')
+    return '{} HTML chars'.format(len(output))
+
+
 def _checks():
     checks = [('python runtime', _check_python)]
     for name in ('PyQt5', 'qtpy', 'qtawesome', 'qtmodern', 'openpyxl', 'docx', 'pyfcstm'):
@@ -208,12 +304,24 @@ def _checks():
     checks.extend([('java executable', _check_java), ('plantuml.jar', _check_plantuml_jar),
                    ('pyfcstm DSL/model/PlantUML roundtrip', _check_pyfcstm_roundtrip),
                    ('pyfcstm simulation runtime', _check_pyfcstm_simulation),
+                   ('pyfcstm invalid syntax diagnostics', _check_invalid_diagnostics),
+                   ('pyfcstm inspect human', lambda: _check_inspect('human')),
+                   ('pyfcstm inspect json', lambda: _check_inspect('json')),
+                   ('pyfcstm PlantUML CLI', _check_pyfcstm_plantuml_cli),
+                   ('pyfcstm visualize PNG', lambda: _check_visualize('png')),
+                   ('pyfcstm visualize SVG', lambda: _check_visualize('svg')),
+                   ('pyfcstm visualize PDF', lambda: _check_visualize('pdf')),
+                   ('pyfcstm batch simulation CLI', _check_simulate_cli),
+                   ('pyfcstm Pygments highlighting', _check_pygments_highlight),
                    ('Z3 SAT solver', _check_z3_solver),
                    ('Qt application', _check_qt_application),
                    ('Qt native widgets and assets', _check_qt_native_widgets),
                    ('XLSX and DOCX roundtrips', _check_office_roundtrips),
                    ('PlantUML Java PNG render', _check_plantuml_render),
                    ('main GUI window lifecycle', _check_main_window)])
+    for template_name in ('python', 'c', 'c_poll', 'cpp', 'cpp_poll'):
+        checks.append(('pyfcstm generate template ' + template_name,
+                       lambda template_name=template_name: _check_template(template_name)))
     try:
         module_names = _pyfcstm_module_names()
     except BaseException as exc:
