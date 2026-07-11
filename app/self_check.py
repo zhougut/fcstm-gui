@@ -5,7 +5,9 @@ import os
 import platform
 import pkgutil
 import shutil
+import subprocess
 import sys
+import tempfile
 import traceback
 
 RESET = '\033[0m'
@@ -88,15 +90,106 @@ def _check_z3_solver():
     return z3.get_version_string()
 
 
+def _check_qt_native_widgets():
+    from PyQt5.Qsci import QsciScintilla
+    from PyQt5.QtWidgets import QApplication
+    import qtawesome
+    import qtmodern.styles
+    app = QApplication.instance() or QApplication([])
+    editor = QsciScintilla()
+    editor.setText('state Smoke;')
+    icon = qtawesome.icon('fa5s.check')
+    qtmodern.styles.dark(app)
+    editor.show()
+    app.processEvents()
+    if editor.text() != 'state Smoke;' or icon.isNull():
+        raise RuntimeError('Qt native widget/font integration failed')
+    editor.close()
+    return 'QScintilla + qtawesome + qtmodern OK'
+
+
+def _check_office_roundtrips():
+    from io import BytesIO
+    from docx import Document
+    from openpyxl import Workbook, load_workbook
+    xlsx = BytesIO()
+    workbook = Workbook()
+    workbook.active['A1'] = 'fcstm'
+    workbook.save(xlsx)
+    xlsx.seek(0)
+    if load_workbook(xlsx).active['A1'].value != 'fcstm':
+        raise RuntimeError('openpyxl XLSX roundtrip failed')
+    docx = BytesIO()
+    document = Document()
+    document.add_paragraph('fcstm')
+    document.save(docx)
+    docx.seek(0)
+    if Document(docx).paragraphs[0].text != 'fcstm':
+        raise RuntimeError('python-docx roundtrip failed')
+    return '{} XLSX bytes, {} DOCX bytes'.format(len(xlsx.getvalue()), len(docx.getvalue()))
+
+
+def _plantuml_path():
+    roots = [getattr(sys, '_MEIPASS', ''), os.path.dirname(os.path.dirname(os.path.abspath(__file__)))]
+    for root in roots:
+        path = os.path.join(root, 'docs', 'plantuml.jar') if root else ''
+        if path and os.path.isfile(path):
+            return path
+    raise RuntimeError('docs/plantuml.jar is missing')
+
+
+def _check_plantuml_render():
+    java = shutil.which('java')
+    if not java:
+        raise RuntimeError('java is not on PATH')
+    with tempfile.TemporaryDirectory() as directory:
+        source = os.path.join(directory, 'smoke.puml')
+        with open(source, 'w') as file:
+            file.write('@startuml\n[*] --> Ready\n@enduml\n')
+        process = subprocess.run([java, '-jar', _plantuml_path(), '-tpng', source],
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+        output = os.path.join(directory, 'smoke.png')
+        if process.returncode != 0 or not os.path.isfile(output) or os.path.getsize(output) < 100:
+            raise RuntimeError('PlantUML PNG render failed: {!r}'.format(process.stderr[-500:]))
+        return '{} PNG bytes'.format(os.path.getsize(output))
+
+
+def _check_pyfcstm_simulation():
+    from pyfcstm.dsl import parse_with_grammar_entry
+    from pyfcstm.model import parse_dsl_node_to_state_machine
+    from pyfcstm.simulate import SimulationRuntime
+    source = 'state Smoke { state Idle; [*] -> Idle; Idle -> [*]; }'
+    machine = parse_dsl_node_to_state_machine(parse_with_grammar_entry(source, entry_name='state_machine_dsl'))
+    runtime = SimulationRuntime(machine)
+    return type(runtime).__name__ + ' constructed'
+
+
+def _check_main_window():
+    from PyQt5.QtWidgets import QApplication
+    from app.widget import AppMainWindow
+    app = QApplication.instance() or QApplication([])
+    window = AppMainWindow()
+    window.show()
+    app.processEvents()
+    if not window.isVisible():
+        raise RuntimeError('main window did not become visible')
+    window.close()
+    return 'constructed, shown, events processed, closed'
+
+
 def _checks():
     checks = [('python runtime', _check_python)]
     for name in ('PyQt5', 'qtpy', 'qtawesome', 'qtmodern', 'openpyxl', 'docx', 'pyfcstm'):
         checks.append(('import ' + name, lambda name=name: _check_import(name)))
     checks.extend([('java executable', _check_java), ('plantuml.jar', _check_plantuml_jar),
                    ('pyfcstm DSL/model/PlantUML roundtrip', _check_pyfcstm_roundtrip),
+                   ('pyfcstm simulation runtime', _check_pyfcstm_simulation),
                    ('Z3 SAT solver', _check_z3_solver),
                    ('Qt application', _check_qt_application),
-                   ('GUI module import', lambda: _check_import('app.widget.main_window'))])
+                   ('Qt native widgets and assets', _check_qt_native_widgets),
+                   ('XLSX and DOCX roundtrips', _check_office_roundtrips),
+                   ('PlantUML Java PNG render', _check_plantuml_render),
+                   ('main GUI window lifecycle', _check_main_window)])
     try:
         module_names = _pyfcstm_module_names()
     except BaseException as exc:
