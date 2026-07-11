@@ -936,7 +936,7 @@ def test_in_memory_root_overlay_keeps_physical_uri_and_real_import_closure(tmp_p
     )
 
     assert index.root_document.path == str(root.resolve())
-    assert index.root_document.uri == root.resolve().as_uri()
+    assert index.root_document.uri == SourceDocument.from_file(root).uri
     assert index.root_document.text == candidate
     assert root.read_text(encoding="utf-8") == disk_source
     assert index.root_document.revision == 9

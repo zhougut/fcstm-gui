@@ -2,6 +2,7 @@ import pytest
 from PyQt5 import QtCore, QtWidgets
 
 from app.model import State, StateManager
+from app.model.session import ValidationState
 from app.widget import AppMainWindow
 from app.widget import main_window
 
@@ -66,10 +67,10 @@ state TrafficLight {
         assert window.stackedWidget_state_machine.currentIndex() == 1
         assert window.at_page_initial is False
         assert window.state_machine_file_path == str(tmp_path)
-        assert window.document_session.source_text == source.read_text(encoding="utf-8")
+        assert window.document_session.source_text == source.read_bytes().decode("utf-8")
         assert window.document_session.validated_revision == 0
 
-    def test_import_failure_preserves_existing_state_manager(
+    def test_invalid_import_becomes_editable_source_without_stale_model(
         self, monkeypatch, qtbot, window, tmp_path
     ):
         original = StateManager(State("Existing"))
@@ -98,11 +99,106 @@ state TrafficLight {
         with qtbot.waitSignal(window.document_load_finished, timeout=3000):
             window._import_statechart()
 
-        assert window.state_manager is original
-        assert window.state_manager.get_root_state().name == "Existing"
+        assert window.state_manager is None
+        assert window.document_session.source_text == invalid_source.read_text(
+            encoding="utf-8"
+        )
+        assert window.document_session.validation_state is ValidationState.INVALID_SYNTAX
+        assert window.source_editor.toPlainText() == window.document_session.source_text
+        assert window.document_session.last_valid_snapshot is None
         assert messages
         assert messages[0][0] == "导入失败"
         assert "解析fcstm文件时发生错误" in messages[0][1]
+
+    def test_source_editor_change_validates_latest_revision_in_background(
+        self, monkeypatch, qtbot, window, tmp_path
+    ):
+        source = tmp_path / "editable.fcstm"
+        source.write_text(
+            "state Root { state A; [*] -> A; A -> [*]; }",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            QtWidgets.QFileDialog,
+            "getOpenFileName",
+            lambda *args, **kwargs: (str(source), "fcstm Files (*.fcstm)"),
+        )
+        with qtbot.waitSignal(window.document_load_finished, timeout=3000):
+            window._import_statechart()
+
+        with qtbot.waitSignal(window.document_validation_finished, timeout=3000):
+            window.source_editor.setPlainText("state Broken {")
+
+        assert window.document_session.source_revision == 1
+        assert window.document_session.validation_state is ValidationState.INVALID_SYNTAX
+        assert window.document_session.last_valid_snapshot.source_revision == 0
+        assert window.state_manager is None
+        assert not window.action_graph_gen.isEnabled()
+
+        fixed = "state Fixed { state A; [*] -> A; A -> [*]; }"
+        with qtbot.waitSignal(window.document_validation_finished, timeout=3000):
+            window.source_editor.setPlainText(fixed)
+
+        assert window.document_session.source_revision == 2
+        assert window.document_session.validated_revision == 2
+        assert window.state_manager.root_state.name == "Fixed"
+        assert window.action_graph_gen.isEnabled()
+
+    def test_save_writes_exact_source_text_and_clears_dirty(
+        self, monkeypatch, qtbot, window, tmp_path
+    ):
+        source = tmp_path / "save.fcstm"
+        source.write_text(
+            "// keep\nstate Root { state A; [*] -> A; A -> [*]; }\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            QtWidgets.QFileDialog,
+            "getOpenFileName",
+            lambda *args, **kwargs: (str(source), "fcstm Files (*.fcstm)"),
+        )
+        with qtbot.waitSignal(window.document_load_finished, timeout=3000):
+            window._import_statechart()
+        changed = "// keep exactly\nstate Root { state A; [*] -> A; A -> [*]; }\n"
+        with qtbot.waitSignal(window.document_validation_finished, timeout=3000):
+            window.source_editor.setPlainText(changed)
+
+        assert window.document_session.dirty
+        window._save_current_document()
+
+        assert source.read_text(encoding="utf-8") == changed
+        assert not window.document_session.dirty
+
+    def test_dirty_document_cancel_keeps_current_session(
+        self, monkeypatch, qtbot, window, tmp_path
+    ):
+        first = tmp_path / "first.fcstm"
+        second = tmp_path / "second.fcstm"
+        first.write_text("state First;", encoding="utf-8")
+        second.write_text("state Second;", encoding="utf-8")
+        selected = [str(first), str(second)]
+        monkeypatch.setattr(
+            QtWidgets.QFileDialog,
+            "getOpenFileName",
+            lambda *args, **kwargs: (
+                selected.pop(0),
+                "fcstm Files (*.fcstm)",
+            ),
+        )
+        with qtbot.waitSignal(window.document_load_finished, timeout=3000):
+            window._import_statechart()
+        with qtbot.waitSignal(window.document_validation_finished, timeout=3000):
+            window.source_editor.setPlainText("state Changed;")
+        current = window.document_session
+        monkeypatch.setattr(
+            QtWidgets.QMessageBox,
+            "question",
+            lambda *args, **kwargs: QtWidgets.QMessageBox.Cancel,
+        )
+
+        assert window._import_statechart() is None
+        assert window.document_session is current
+        assert window.document_session.path == str(first.resolve())
 
     def test_add_button_creates_root_then_child_without_blocking_dialog(
         self, monkeypatch, qtbot, window

@@ -162,7 +162,17 @@ class DocumentService:
     ) -> DocumentSession:
         if source_text == session.source_text:
             return session
-        return self._validate(session.with_source_text(source_text))
+        return self.validate(self.prepare_source_text(session, source_text))
+
+    def prepare_source_text(
+        self, session: DocumentSession, source_text: str
+    ) -> DocumentSession:
+        if source_text == session.source_text:
+            return session
+        return session.with_source_text(source_text)
+
+    def validate(self, session: DocumentSession) -> DocumentSession:
+        return self._validate(session)
 
     def preview_edits(
         self, session: DocumentSession, edits: Iterable[TextEdit]

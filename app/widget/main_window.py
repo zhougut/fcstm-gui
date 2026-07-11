@@ -11,8 +11,11 @@ from pyfcstm.dsl import parse_with_grammar_entry
 
 from app.ui import UIMainWindow
 from ..model import State, StateManager
-from app.application.document import DocumentService
-from app.application.document import DocumentDependencyStaleError
+from app.application.document import (
+    DocumentDependencyStaleError,
+    DocumentService,
+    InvalidDocumentSaveError,
+)
 from app.application.task_runner import TaskRunner, TaskStatus
 from app.model.session import ValidationState
 from app.utils.dsl_to_ui import (
@@ -34,6 +37,7 @@ import re
 
 class AppMainWindow(QMainWindow, UIMainWindow):
     document_load_finished = QtCore.pyqtSignal(object)
+    document_validation_finished = QtCore.pyqtSignal(object)
     state_manager: Optional[StateManager]
 
     def __init__(self):
@@ -46,6 +50,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self.document_service = DocumentService()
         self.document_session = None
         self.task_runner = TaskRunner(parent=self)
+        self._setting_source_text = False
         
         # 初始化工具提示相关的实例变量
         self._current_tooltip_item = None
@@ -58,6 +63,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self._init_window_style()
         #初始化菜单栏
         self._init_menu_bar()
+        self._init_source_editor()
         #初始化导入状态机按钮
         self._init_import_state_chart()
         self._init_tree_all_state_context_menu()
@@ -90,6 +96,9 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         """初始化菜单栏"""
         # 文件菜单
         self.menu_file.addAction(self.action_import_state_machine)
+        self.action_save_state_machine = QtWidgets.QAction("保存", self)
+        self.action_save_state_machine.setShortcut(QtGui.QKeySequence.Save)
+        self.menu_file.addAction(self.action_save_state_machine)
         self.menu_file.addAction(self.action_export_state_machine)
         
         # 工具菜单
@@ -99,11 +108,25 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         
         # 连接菜单项信号
         self.action_import_state_machine.triggered.connect(self._import_statechart)
+        self.action_save_state_machine.triggered.connect(self._save_current_document)
         self.action_export_state_machine.triggered.connect(self._export_statechart)
         self.action_validate_state_machine.triggered.connect(self._validate_statechart)
         self.action_graph_gen.triggered.connect(self._graph_gen)
 
         self.action_code_gen.triggered.connect(self._code_gen)
+
+    def _init_source_editor(self):
+        self.setWindowTitle("fcstm[*]")
+        self.source_dock = QtWidgets.QDockWidget("源码", self)
+        self.source_dock.setObjectName("source_dock")
+        self.source_editor = QtWidgets.QPlainTextEdit(self.source_dock)
+        self.source_editor.setObjectName("source_editor")
+        self.source_editor.setLineWrapMode(QtWidgets.QPlainTextEdit.NoWrap)
+        self.source_dock.setWidget(self.source_editor)
+        self.addDockWidget(Qt.BottomDockWidgetArea, self.source_dock)
+        self.source_dock.hide()
+        self.source_editor.textChanged.connect(self._on_source_text_changed)
+        self.action_save_state_machine.setEnabled(False)
 
     def _init_import_state_chart(self):
         self._init_button_initial_import_state_machine()
@@ -596,6 +619,8 @@ class AppMainWindow(QMainWindow, UIMainWindow):
             )
             if not file_path:
                 return
+            if not self._confirm_document_replacement():
+                return
                 
             # 更新上次使用的路径
             self.state_machine_file_path = os.path.dirname(file_path)
@@ -625,6 +650,24 @@ class AppMainWindow(QMainWindow, UIMainWindow):
                 QtWidgets.QMessageBox.Ok
             )
 
+    def _confirm_document_replacement(self):
+        if self.document_session is None or not self.document_session.dirty:
+            return True
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "未保存的修改",
+            "当前文档有未保存的修改。",
+            QtWidgets.QMessageBox.Save
+            | QtWidgets.QMessageBox.Discard
+            | QtWidgets.QMessageBox.Cancel,
+            QtWidgets.QMessageBox.Save,
+        )
+        if reply == QtWidgets.QMessageBox.Cancel:
+            return False
+        if reply == QtWidgets.QMessageBox.Save:
+            return self._save_current_document()
+        return True
+
     @QtCore.pyqtSlot(object)
     def _finish_document_load(self, result):
         try:
@@ -642,6 +685,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
                 ValidationState.VALID,
                 ValidationState.VALID_WITH_WARNINGS,
             }:
+                self._set_active_document_session(session)
                 detail = "\n".join(str(item) for item in session.current_diagnostics)
                 QtWidgets.QMessageBox.critical(
                     self,
@@ -665,13 +709,153 @@ class AppMainWindow(QMainWindow, UIMainWindow):
                 snapshot.model,
                 extract_variable_definitions(session.source_text),
             )
-            self.document_session = session
-            self.state_manager = manager
-            update_ui_from_state_manager(self, manager)
+            self._set_active_document_session(session, manager=manager)
         finally:
             self.document_load_finished.emit(result)
 
+    def _set_active_document_session(self, session, manager=None):
+        self.document_session = session
+        self._setting_source_text = True
+        try:
+            self.source_editor.setPlainText(session.source_text)
+        finally:
+            self._setting_source_text = False
+        self.source_dock.show()
+        if manager is None and session.current_valid_snapshot is not None:
+            snapshot = session.current_valid_snapshot
+            manager = convert_state_machine_to_state_manager(
+                snapshot.model,
+                extract_variable_definitions(session.source_text),
+            )
+        if manager is None:
+            self._clear_model_projection()
+        else:
+            self.state_manager = manager
+            update_ui_from_state_manager(self, manager)
+        self._update_document_actions()
+
+    def _clear_model_projection(self):
+        self.state_manager = None
+        self.tree_all_state.clear()
+        self.edit_var_def.clear()
+        self.table_transition.setRowCount(0)
+        self.table_lifecycle.setRowCount(0)
+
+    def _update_document_actions(self):
+        session = self.document_session
+        current_valid = (
+            session is not None and session.current_valid_snapshot is not None
+        )
+        self.action_save_state_machine.setEnabled(session is not None)
+        self.action_graph_gen.setEnabled(current_valid)
+        self.action_code_gen.setEnabled(current_valid)
+        self.setWindowModified(bool(session and session.dirty))
+        if session is not None:
+            self.setWindowFilePath(session.path)
+
+    def _on_source_text_changed(self):
+        if self._setting_source_text or self.document_session is None:
+            return
+        source_text = self.source_editor.toPlainText()
+        pending = self.document_service.prepare_source_text(
+            self.document_session, source_text
+        )
+        if pending is self.document_session:
+            return
+        self.document_session = pending
+        self._clear_model_projection()
+        self._update_document_actions()
+        service = self.document_service
+
+        def validate_document(token):
+            token.raise_if_cancelled()
+            validated = service.validate(pending)
+            token.raise_if_cancelled()
+            return validated
+
+        dependency_fingerprint = None
+        if pending.last_valid_snapshot is not None:
+            dependency_fingerprint = (
+                pending.last_valid_snapshot.dependency_fingerprint
+            )
+        handle = self.task_runner.submit(
+            "document-validate",
+            pending.source_revision,
+            validate_document,
+            session_id=pending.session_id,
+            channel="document-validate",
+            dependency_fingerprint=dependency_fingerprint,
+        )
+        handle.finished.connect(self._finish_document_validation)
+
+    @QtCore.pyqtSlot(object)
+    def _finish_document_validation(self, result):
+        try:
+            current = self.document_session
+            if result.status is not TaskStatus.SUCCESS or current is None:
+                return
+            validated = result.value
+            if (
+                validated.session_id != current.session_id
+                or validated.source_revision != current.source_revision
+                or validated.source_text != current.source_text
+            ):
+                return
+            self._set_active_document_session(validated)
+        finally:
+            self.document_validation_finished.emit(result)
+
+    def _save_current_document(self):
+        if self.document_session is None:
+            return False
+        try:
+            saved = self.document_service.save(self.document_session)
+        except InvalidDocumentSaveError:
+            reply = QtWidgets.QMessageBox.question(
+                self,
+                "保存无效源码",
+                "当前源码未通过完整校验，仍保存源码吗？",
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                QtWidgets.QMessageBox.No,
+            )
+            if reply != QtWidgets.QMessageBox.Yes:
+                return False
+            saved = self.document_service.save(
+                self.document_session, allow_invalid=True
+            )
+        except Exception as error:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "保存失败",
+                "保存源码时发生错误：\n{}".format(error),
+                QtWidgets.QMessageBox.Ok,
+            )
+            return False
+        self.document_session = saved
+        self._update_document_actions()
+        return True
+
     def closeEvent(self, event):
+        if (
+            self.isVisible()
+            and self.document_session is not None
+            and self.document_session.dirty
+        ):
+            reply = QtWidgets.QMessageBox.question(
+                self,
+                "未保存的修改",
+                "当前文档有未保存的修改。",
+                QtWidgets.QMessageBox.Save
+                | QtWidgets.QMessageBox.Discard
+                | QtWidgets.QMessageBox.Cancel,
+                QtWidgets.QMessageBox.Save,
+            )
+            if reply == QtWidgets.QMessageBox.Cancel:
+                event.ignore()
+                return
+            if reply == QtWidgets.QMessageBox.Save and not self._save_current_document():
+                event.ignore()
+                return
         self.task_runner.shutdown(wait=False)
         super().closeEvent(event)
 
