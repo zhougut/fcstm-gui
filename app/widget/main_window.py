@@ -11,7 +11,15 @@ from pyfcstm.dsl import parse_with_grammar_entry
 
 from app.ui import UIMainWindow
 from ..model import State, StateManager
-from app.utils.dsl_to_ui import dsl_to_state_manager, update_ui_from_state_manager
+from app.application.document import DocumentService
+from app.application.document import DocumentDependencyStaleError
+from app.application.task_runner import TaskRunner, TaskStatus
+from app.model.session import ValidationState
+from app.utils.dsl_to_ui import (
+    convert_state_machine_to_state_manager,
+    extract_variable_definitions,
+    update_ui_from_state_manager,
+)
 from app.utils.export_to_word import export_statechart_to_word
 from app.utils.export_to_excel import export_statechart_to_excel
 from app.utils.ui_to_dsl import format_state
@@ -25,6 +33,7 @@ from .dialog_add_transition import DialogAddTransition
 import re
 
 class AppMainWindow(QMainWindow, UIMainWindow):
+    document_load_finished = QtCore.pyqtSignal(object)
     state_manager: Optional[StateManager]
 
     def __init__(self):
@@ -34,6 +43,9 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         #self.fcstm_state_chart = None
         self.code_file_path = "./"
         self.state_machine_file_path = "./"
+        self.document_service = DocumentService()
+        self.document_session = None
+        self.task_runner = TaskRunner(parent=self)
         
         # 初始化工具提示相关的实例变量
         self._current_tooltip_item = None
@@ -588,19 +600,22 @@ class AppMainWindow(QMainWindow, UIMainWindow):
             # 更新上次使用的路径
             self.state_machine_file_path = os.path.dirname(file_path)
             
-            try:
-                # 使用新的DSL转换功能
-                self.state_manager = dsl_to_state_manager(file_path)
-                # 更新UI界面
-                update_ui_from_state_manager(self, self.state_manager)
-            except Exception as e:
-                QtWidgets.QMessageBox.critical(
-                    self,
-                    "导入失败",
-                    f"解析fcstm文件时发生错误：\n{str(e)}",
-                    QtWidgets.QMessageBox.Ok
-                )
-                return
+            service = self.document_service
+
+            def load_document(token):
+                token.raise_if_cancelled()
+                session = service.load(file_path)
+                token.raise_if_cancelled()
+                return session
+
+            handle = self.task_runner.submit(
+                "document-load",
+                0,
+                load_document,
+                channel="document-load",
+            )
+            handle.finished.connect(self._finish_document_load)
+            return handle
                 
         except Exception as e:
             QtWidgets.QMessageBox.critical(
@@ -609,6 +624,56 @@ class AppMainWindow(QMainWindow, UIMainWindow):
                 f"导入状态机时发生未知错误：\n{str(e)}",
                 QtWidgets.QMessageBox.Ok
             )
+
+    @QtCore.pyqtSlot(object)
+    def _finish_document_load(self, result):
+        try:
+            if result.status is not TaskStatus.SUCCESS:
+                if result.status is TaskStatus.FAILED:
+                    QtWidgets.QMessageBox.critical(
+                        self,
+                        "导入失败",
+                        "读取fcstm文件时发生错误：\n{}".format(result.error),
+                        QtWidgets.QMessageBox.Ok,
+                    )
+                return
+            session = result.value
+            if session.validation_state not in {
+                ValidationState.VALID,
+                ValidationState.VALID_WITH_WARNINGS,
+            }:
+                detail = "\n".join(str(item) for item in session.current_diagnostics)
+                QtWidgets.QMessageBox.critical(
+                    self,
+                    "导入失败",
+                    "解析fcstm文件时发生错误：\n{}".format(detail),
+                    QtWidgets.QMessageBox.Ok,
+                )
+                return
+            try:
+                self.document_service.require_current_valid_snapshot(session)
+            except DocumentDependencyStaleError as error:
+                QtWidgets.QMessageBox.critical(
+                    self,
+                    "导入失败",
+                    "依赖文件在加载期间发生变化：\n{}".format(error),
+                    QtWidgets.QMessageBox.Ok,
+                )
+                return
+            snapshot = session.require_current_valid_snapshot()
+            manager = convert_state_machine_to_state_manager(
+                snapshot.model,
+                extract_variable_definitions(session.source_text),
+            )
+            self.document_session = session
+            self.state_manager = manager
+            update_ui_from_state_manager(self, manager)
+        finally:
+            self.document_load_finished.emit(result)
+
+    def closeEvent(self, event):
+        self.task_runner.shutdown(wait=False)
+        super().closeEvent(event)
 
     def _export_statechart(self):
         try:

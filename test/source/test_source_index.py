@@ -1,3 +1,4 @@
+import hashlib
 import os
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from app.source import (
     SourceIndexError,
     StaleSourceRefError,
     build_source_index,
+    build_source_index_from_text,
     load_with_source_index,
 )
 
@@ -916,3 +918,63 @@ state Root {
     )
     path.write_bytes(deleted.encode("utf-8"))
     build_source_index(path)
+
+
+def test_in_memory_root_overlay_keeps_physical_uri_and_real_import_closure(tmp_path):
+    child = tmp_path / "child.fcstm"
+    root = tmp_path / "root.fcstm"
+    child.write_bytes(b"state Child;")
+    disk_source = 'state Root { import "./child.fcstm" as Item; }'
+    root.write_bytes(disk_source.encode("utf-8"))
+    candidate = "// unsaved\n" + disk_source
+
+    index = build_source_index_from_text(
+        root,
+        candidate,
+        revision=9,
+        encoding="utf-8",
+    )
+
+    assert index.root_document.path == str(root.resolve())
+    assert index.root_document.uri == root.resolve().as_uri()
+    assert index.root_document.text == candidate
+    assert root.read_text(encoding="utf-8") == disk_source
+    assert index.root_document.revision == 9
+    assert index.dependency_manifest == (
+        (child.resolve().as_uri(), hashlib.sha256(child.read_bytes()).hexdigest()),
+    )
+
+
+def test_dependency_match_ignores_unsaved_root_but_detects_import_change(tmp_path):
+    child = tmp_path / "child.fcstm"
+    root = tmp_path / "root.fcstm"
+    child.write_bytes(b"state Child;")
+    disk_source = 'state Root { import "./child.fcstm" as Item; }'
+    root.write_bytes(disk_source.encode("utf-8"))
+    index = build_source_index_from_text(
+        root,
+        "// dirty\n" + disk_source,
+        revision=3,
+        encoding="utf-8",
+    )
+
+    assert index.matches_dependencies_on_disk()
+    assert not index.matches_disk()
+
+    child.write_bytes(b"state Changed;")
+    assert not index.matches_dependencies_on_disk()
+
+
+def test_in_memory_root_overlay_supports_a_not_yet_saved_document(tmp_path):
+    path = tmp_path / "new.fcstm"
+
+    index = build_source_index_from_text(
+        path,
+        "state New;",
+        revision=1,
+        encoding="utf-8",
+    )
+
+    assert not path.exists()
+    assert index.root_document.path == str(path.resolve())
+    assert index.root_document.text == "state New;"

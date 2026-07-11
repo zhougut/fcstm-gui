@@ -155,6 +155,10 @@ class SourceIndex:
 
     def text_for_ref(self, ref: SourceRef) -> str:
         document = self.document_for_ref(ref)
+        if ref not in self.refs_by_document.get(document.document_id, ()):
+            raise StaleSourceRefError(
+                "source ref was not issued by this source index"
+            )
         if not (
             0 <= ref.span.start_offset <= ref.span.end_offset <= len(document.text)
         ):
@@ -187,6 +191,27 @@ class SourceIndex:
         except (OSError, SourceIndexError):
             return False
         return current.closure_manifest == self.closure_manifest
+
+    def matches_dependencies_on_disk(self) -> bool:
+        encodings = {
+            os.path.normcase(document.path): document.encoding
+            for document in self.documents.values()
+        }
+
+        def resolve_encoding(path: Path) -> Optional[str]:
+            return encodings.get(os.path.normcase(str(canonical_path(path))))
+
+        try:
+            current = build_source_index_from_text(
+                self.root_document.path,
+                self.root_document.text,
+                revision=self.root_document.revision,
+                encoding=self.root_document.encoding,
+                encoding_resolver=resolve_encoding,
+            )
+        except (OSError, SourceIndexError):
+            return False
+        return current.dependency_manifest == self.dependency_manifest
 
     def projections_for_ref(self, ref: SourceRef) -> Tuple[SourceProjection, ...]:
         return tuple(
@@ -518,6 +543,20 @@ class SourceIndex:
             )
         if anchor.container_declaration_ref is not None:
             self.text_for_declaration(anchor.container_declaration_ref)
+        try:
+            expected = self.insertion_anchor(
+                anchor.slot,
+                owner_path=anchor.owner_path,
+                declaration_ref=anchor.container_declaration_ref,
+            )
+        except SourceIndexError as error:
+            raise StaleSourceRefError(
+                "insertion anchor cannot be rederived from this source index"
+            ) from error
+        if expected != anchor:
+            raise StaleSourceRefError(
+                "insertion anchor was not issued by this source index"
+            )
 
 
 def _rule_name(context: ParserRuleContext) -> str:
@@ -911,7 +950,8 @@ class _SourceIndexBuilder:
         stack: Sequence[str],
     ) -> SourceDocument:
         resolved = canonical_path(path)
-        if not resolved.is_file():
+        path_key = os.path.normcase(str(resolved))
+        if not resolved.is_file() and path_key not in self.snapshot.raw_by_path:
             raise SourceImportNotFoundError(
                 "import source file does not exist: {}".format(resolved)
             )
@@ -1002,10 +1042,13 @@ def _capture_snapshot(
     root_path: PathLike,
     root_encoding: Optional[str] = None,
     encoding_resolver: Optional[Callable[[Path], Optional[str]]] = None,
+    root_raw: Optional[bytes] = None,
 ) -> _CapturedSnapshot:
     documents = {}  # type: Dict[str, SourceDocument]
     raw_by_path = {}  # type: Dict[str, bytes]
     encoding_by_path = {}  # type: Dict[str, str]
+
+    root_resolved = canonical_path(root_path)
 
     def visit(path: Path, stack: Tuple[str, ...]) -> None:
         resolved = canonical_path(path)
@@ -1017,9 +1060,14 @@ def _capture_snapshot(
             else None
         )
         try:
-            document = SourceDocument.from_file(
-                resolved, encoding=selected_encoding
-            )
+            if not stack and root_raw is not None and resolved == root_resolved:
+                document = SourceDocument.from_bytes(
+                    resolved, root_raw, encoding=selected_encoding
+                )
+            else:
+                document = SourceDocument.from_file(
+                    resolved, encoding=selected_encoding
+                )
         except OSError as error:
             raise SourceIndexError(
                 "unable to read source file {}: {}".format(resolved, error),
@@ -1060,7 +1108,7 @@ def _capture_snapshot(
                 )
             visit(resolved_target, next_stack)
 
-    visit(canonical_path(root_path), ())
+    visit(root_resolved, ())
     manifest = tuple(
         sorted((item.uri, item.sha256) for item in documents.values())
     )
@@ -1152,11 +1200,13 @@ def _require_snapshot_unchanged(
     index: SourceIndex,
     root_encoding: Optional[str] = None,
     encoding_resolver: Optional[Callable[[Path], Optional[str]]] = None,
+    root_raw: Optional[bytes] = None,
 ) -> None:
     after_manifest = _capture_snapshot(
         root_path,
         root_encoding=root_encoding,
         encoding_resolver=encoding_resolver,
+        root_raw=root_raw,
     ).manifest
     if (
         before_manifest != index.closure_manifest
@@ -1211,5 +1261,74 @@ def load_with_source_index(
         index,
         root_encoding=encoding,
         encoding_resolver=encoding_resolver,
+    )
+    return index, result
+
+
+def _encode_source_text(root_path: PathLike, text: str, encoding: str) -> bytes:
+    raw = text.encode(encoding)
+    decoded = SourceDocument.from_bytes(
+        root_path,
+        raw,
+        revision=0,
+        encoding=encoding,
+    )
+    if decoded.text != text:
+        raise UnicodeError(
+            "source text does not round-trip with {}".format(encoding)
+        )
+    return raw
+
+
+def build_source_index_from_text(
+    root_path: PathLike,
+    text: str,
+    revision: int,
+    encoding: str,
+    encoding_resolver: Optional[Callable[[Path], Optional[str]]] = None,
+) -> SourceIndex:
+    root_raw = _encode_source_text(root_path, text, encoding)
+    before = _capture_snapshot(
+        root_path,
+        root_encoding=encoding,
+        encoding_resolver=encoding_resolver,
+        root_raw=root_raw,
+    )
+    index = _build_from_snapshot(root_path, before, revision)
+    _require_snapshot_unchanged(
+        root_path,
+        before.manifest,
+        index,
+        root_encoding=encoding,
+        encoding_resolver=encoding_resolver,
+        root_raw=root_raw,
+    )
+    return index
+
+
+def load_text_with_source_index(
+    root_path: PathLike,
+    text: str,
+    loader: Callable[[SourceIndex], T],
+    revision: int,
+    encoding: str,
+    encoding_resolver: Optional[Callable[[Path], Optional[str]]] = None,
+) -> Tuple[SourceIndex, T]:
+    root_raw = _encode_source_text(root_path, text, encoding)
+    before = _capture_snapshot(
+        root_path,
+        root_encoding=encoding,
+        encoding_resolver=encoding_resolver,
+        root_raw=root_raw,
+    )
+    index = _build_from_snapshot(root_path, before, revision)
+    result = loader(index)
+    _require_snapshot_unchanged(
+        root_path,
+        before.manifest,
+        index,
+        root_encoding=encoding,
+        encoding_resolver=encoding_resolver,
+        root_raw=root_raw,
     )
     return index, result

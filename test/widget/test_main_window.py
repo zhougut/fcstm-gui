@@ -50,7 +50,8 @@ state TrafficLight {
             lambda *args, **kwargs: (str(source), "fcstm Files (*.fcstm)"),
         )
 
-        window._import_statechart()
+        with qtbot.waitSignal(window.document_load_finished, timeout=3000):
+            window._import_statechart()
 
         manager = window.state_manager
         assert manager.get_root_state().name == "TrafficLight"
@@ -65,9 +66,11 @@ state TrafficLight {
         assert window.stackedWidget_state_machine.currentIndex() == 1
         assert window.at_page_initial is False
         assert window.state_machine_file_path == str(tmp_path)
+        assert window.document_session.source_text == source.read_text(encoding="utf-8")
+        assert window.document_session.validated_revision == 0
 
     def test_import_failure_preserves_existing_state_manager(
-        self, monkeypatch, window, tmp_path
+        self, monkeypatch, qtbot, window, tmp_path
     ):
         original = StateManager(State("Existing"))
         original.variable_definitions = "def int value = 7;"
@@ -92,7 +95,8 @@ state TrafficLight {
             ),
         )
 
-        window._import_statechart()
+        with qtbot.waitSignal(window.document_load_finished, timeout=3000):
+            window._import_statechart()
 
         assert window.state_manager is original
         assert window.state_manager.get_root_state().name == "Existing"

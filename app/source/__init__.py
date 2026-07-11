@@ -5,6 +5,8 @@ from .index import (
     SourceIndexError,
     SourceSnapshotChangedError,
     build_source_index,
+    build_source_index_from_text,
+    load_text_with_source_index,
     load_with_source_index,
 )
 from .model import (
@@ -17,6 +19,7 @@ from .model import (
     SourceRef,
     SourceSpan,
     StaleSourceRefError,
+    canonical_path,
 )
 
 __all__ = [
@@ -34,6 +37,9 @@ __all__ = [
     "SourceRef",
     "SourceSpan",
     "StaleSourceRefError",
+    "canonical_path",
     "build_source_index",
+    "build_source_index_from_text",
+    "load_text_with_source_index",
     "load_with_source_index",
 ]
