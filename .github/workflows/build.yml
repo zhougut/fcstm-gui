@@ -25,6 +25,18 @@ jobs:
         with:
           distribution: temurin
           java-version: '11'
+      - name: Install Windows Cairo build runtime
+        if: runner.os == 'Windows'
+        id: msys2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: mingw-w64-x86_64-cairo
+      - name: Expose Windows Cairo build runtime
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo "${{ steps.msys2.outputs.msys2-location }}\\mingw64\\bin" >> "$GITHUB_PATH"
       - name: Install Linux build runtime
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y xvfb libxkbcommon-x11-0 libxcb-xinerama0 libxcb-cursor0 libegl1 libgl1
