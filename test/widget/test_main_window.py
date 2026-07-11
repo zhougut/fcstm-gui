@@ -69,6 +69,10 @@ state TrafficLight {
         assert window.state_machine_file_path == str(tmp_path)
         assert window.document_session.source_text == source.read_bytes().decode("utf-8")
         assert window.document_session.validated_revision == 0
+        assert window.edit_var_def.isReadOnly()
+        assert not window.button_add_state.isEnabled()
+        assert not window.button_transition.isEnabled()
+        assert not window.button_lifecycle.isEnabled()
 
     def test_invalid_import_becomes_editable_source_without_stale_model(
         self, monkeypatch, qtbot, window, tmp_path
@@ -199,6 +203,50 @@ state TrafficLight {
         assert window._import_statechart() is None
         assert window.document_session is current
         assert window.document_session.path == str(first.resolve())
+
+    def test_loaded_document_validation_and_dsl_export_use_source_authority(
+        self, monkeypatch, qtbot, window, tmp_path
+    ):
+        source = tmp_path / "authority.fcstm"
+        original = "// exact\nstate Root { state A; [*] -> A; A -> [*]; }\n"
+        source.write_text(original, encoding="utf-8")
+        selected = [(str(source), "fcstm Files (*.fcstm)")]
+        monkeypatch.setattr(
+            QtWidgets.QFileDialog,
+            "getOpenFileName",
+            lambda *args, **kwargs: selected.pop(0),
+        )
+        with qtbot.waitSignal(window.document_load_finished, timeout=3000):
+            window._import_statechart()
+        monkeypatch.setattr(
+            main_window,
+            "state_manager_to_dsl",
+            lambda manager: (_ for _ in ()).throw(
+                AssertionError("loaded document must not regenerate DSL")
+            ),
+        )
+        messages = []
+        monkeypatch.setattr(
+            QtWidgets.QMessageBox,
+            "information",
+            lambda parent, title, text, *args: messages.append((title, text)),
+        )
+
+        report = window._validate_statechart()
+
+        assert report["root_state_path"] == "Root"
+        assert messages
+        exported = tmp_path / "exported.fcstm"
+        monkeypatch.setattr(
+            QtWidgets.QFileDialog,
+            "getSaveFileName",
+            lambda *args, **kwargs: (
+                str(exported),
+                "fcstm Files (*.fcstm)",
+            ),
+        )
+        window._export_statechart()
+        assert exported.read_bytes().decode("utf-8") == original
 
     def test_add_button_creates_root_then_child_without_blocking_dialog(
         self, monkeypatch, qtbot, window

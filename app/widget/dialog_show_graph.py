@@ -31,10 +31,11 @@ class CustomGraphicsView(QGraphicsView):
         self.translate(delta.x(), delta.y())
 
 class DialogShowGraph(QDialog, UIDialogShowGraph):
-    def __init__(self, parent, state_manager: StateManager):
+    def __init__(self, parent, state_manager: StateManager, model=None):
         QDialog.__init__(self, parent)
         self.setupUi(self)
         self.state_manager = state_manager
+        self.model = model
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
         self.temp_png_path = os.path.join(tempfile.gettempdir(), 'temp_state_graph.png')
         
@@ -61,7 +62,9 @@ class DialogShowGraph(QDialog, UIDialogShowGraph):
     def show_state_graph(self):
         """显示状态机图"""
         # 生成状态机图
-        ShowStateGraph.show_state_graph(self.state_manager, self.temp_png_path)
+        ShowStateGraph.show_state_graph(
+            self.state_manager, self.temp_png_path, model=self.model
+        )
         
         # 创建场景并显示图像
         scene = QGraphicsScene()

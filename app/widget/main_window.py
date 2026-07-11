@@ -749,6 +749,10 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self.action_save_state_machine.setEnabled(session is not None)
         self.action_graph_gen.setEnabled(current_valid)
         self.action_code_gen.setEnabled(current_valid)
+        self.edit_var_def.setReadOnly(session is not None)
+        self.button_add_state.setEnabled(session is None)
+        self.button_lifecycle.setEnabled(session is None)
+        self.button_transition.setEnabled(session is None)
         self.setWindowModified(bool(session and session.dirty))
         if session is not None:
             self.setWindowFilePath(session.path)
@@ -885,17 +889,26 @@ class AppMainWindow(QMainWindow, UIMainWindow):
                     if not file_name.endswith('.fcstm'):
                         file_name += '.fcstm'
 
-                    # 将StateManager转换为fcstm格式
-                    dsl_str = state_manager_to_dsl(self.state_manager)
+                    dsl_str = (
+                        self.document_session.source_text
+                        if self.document_session is not None
+                        else state_manager_to_dsl(self.state_manager)
+                    )
                     with open(file_name, 'w', encoding='utf-8') as f:
                         f.write(dsl_str)
 
                 elif selected_filter == "Word Documents (*.docx)":
+                    if self.document_session is not None:
+                        if self._require_current_snapshot_for_action("导出") is None:
+                            return
                     # 确保文件名以 .docx 结尾
                     if not file_name.endswith('.docx'):
                         file_name += '.docx'
                     export_statechart_to_word(self.state_manager, file_name)
                 elif selected_filter == "Excel Files (*.xlsx)":
+                    if self.document_session is not None:
+                        if self._require_current_snapshot_for_action("导出") is None:
+                            return
                     # 确保文件名以 .xlsx 结尾
                     if not file_name.endswith('.xlsx'):
                         file_name += '.xlsx'
@@ -918,6 +931,20 @@ class AppMainWindow(QMainWindow, UIMainWindow):
     def _validate_statechart(self):
         """验证状态机"""
         try:
+            if self.document_session is not None:
+                snapshot = self._require_current_snapshot_for_action("模型检查")
+                if snapshot is None:
+                    return
+                warning_count = sum(
+                    1
+                    for item in self.document_session.current_diagnostics
+                    if str(getattr(item, "severity", "")).lower() == "warning"
+                )
+                message = "状态机检查通过！"
+                if warning_count:
+                    message += "\n{} 条警告。".format(warning_count)
+                QtWidgets.QMessageBox.information(self, "检查结果", message)
+                return snapshot.inspect_report
             # 获取当前的DSL代码
             dsl_content = state_manager_to_dsl(self.state_manager)
             
@@ -957,7 +984,15 @@ class AppMainWindow(QMainWindow, UIMainWindow):
                     QtWidgets.QMessageBox.Ok
                 )
                 return
-            dialog_show_graph = DialogShowGraph(self, self.state_manager)
+            model = None
+            if self.document_session is not None:
+                snapshot = self._require_current_snapshot_for_action("状态图")
+                if snapshot is None:
+                    return
+                model = snapshot.model
+            dialog_show_graph = DialogShowGraph(
+                self, self.state_manager, model=model
+            )
             dialog_show_graph.exec_()
 
         except Exception as e:
@@ -981,7 +1016,13 @@ class AppMainWindow(QMainWindow, UIMainWindow):
                 return
             
             # 显示代码生成对话框
-            dialog = DialogCodeGen(self, self.state_manager)
+            model = None
+            if self.document_session is not None:
+                snapshot = self._require_current_snapshot_for_action("代码生成")
+                if snapshot is None:
+                    return
+                model = snapshot.model
+            dialog = DialogCodeGen(self, self.state_manager, model=model)
             dialog.exec_()
             
         except Exception as e:
@@ -991,6 +1032,22 @@ class AppMainWindow(QMainWindow, UIMainWindow):
                 f"代码生成时发生错误：\n{str(e)}",
                 QtWidgets.QMessageBox.Ok
             )
+
+    def _require_current_snapshot_for_action(self, action_name):
+        if self.document_session is None:
+            return None
+        try:
+            return self.document_service.require_current_valid_snapshot(
+                self.document_session
+            )
+        except Exception as error:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "{}不可用".format(action_name),
+                "当前源码没有可用的有效快照：\n{}".format(error),
+                QtWidgets.QMessageBox.Ok,
+            )
+            return None
 
     def _on_tree_item_selection_changed(self):
         """

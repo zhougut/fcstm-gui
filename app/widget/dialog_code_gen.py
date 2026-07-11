@@ -12,12 +12,13 @@ from pyfcstm.model import parse_dsl_node_to_state_machine
 from pyfcstm.render import StateMachineCodeRenderer
 
 class DialogCodeGen(QDialog, UIDialogCodeGen):
-    def __init__(self, parent, state_manager: StateManager):
+    def __init__(self, parent, state_manager: StateManager, model=None):
         QDialog.__init__(self, parent)
         self.setupUi(self)
         self.setFixedSize(self.width(), self.height())
 
         self.state_manager = state_manager
+        self.model = model
 
         self._init()
 
@@ -69,10 +70,13 @@ class DialogCodeGen(QDialog, UIDialogCodeGen):
                 os.makedirs(output_dir)
 
             # 获取state_manager的dsl表示
-            dsl_code = state_manager_to_dsl(self.state_manager)
-
-            ast_node = parse_with_grammar_entry(dsl_code, entry_name='state_machine_dsl')
-            model = parse_dsl_node_to_state_machine(ast_node)
+            model = self.model
+            if model is None:
+                dsl_code = state_manager_to_dsl(self.state_manager)
+                ast_node = parse_with_grammar_entry(
+                    dsl_code, entry_name='state_machine_dsl'
+                )
+                model = parse_dsl_node_to_state_machine(ast_node)
 
             renderer = StateMachineCodeRenderer(
                 template_dir=template_dir,
