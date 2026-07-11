@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 
 from ..model import StateManager
-from .ui_to_dsl import state_manager_to_dsl
+from .ui_to_dsl import format_transition_item, state_manager_to_dsl
 from pyfcstm.dsl import parse_with_grammar_entry
 from pyfcstm.model import parse_dsl_node_to_state_machine
 
@@ -51,8 +51,9 @@ def export_statechart_to_word(state_manager: StateManager, file_path: str):
         s_table.cell(0, 0).text = "状态名称"
         s_table.cell(0, 1).text = state.name
         s_table.cell(1, 0).text = "父状态"
-        state_parent = state_manager.get_state(state.name).parent
-        s_table.cell(1, 1).text = state_parent if state_parent is not None else "无"
+        model_state = state_manager.get_state_by_path(".".join(state.path))
+        state_parent = model_state.parent if model_state is not None else None
+        s_table.cell(1, 1).text = state_parent.name if state_parent is not None else "无"
         s_table.cell(2, 0).text = "子状态数"
         s_table.cell(2, 1).text = str(len(state.substate_name_to_id))
         s_table.cell(3, 0).text = "类型"
@@ -72,17 +73,13 @@ def export_statechart_to_word(state_manager: StateManager, file_path: str):
         )
         # 转移
         s_table.cell(7, 0).text = "转移"
-        transitions = state_manager.get_state(state.name).transition
-        '''
-        if getattr(state, 'transitions', None):
-            for t in state.transitions:
-                t_str = f"{t.from_state} -> {t.to_state}"
-                if t.event: t_str += f" : {t.event.name}"
-                if t.guard: t_str += f" if [{t.guard}]"
-                if t.effects:
-                    t_str += " effect { " + '; '.join(f"{op.var_name} = {op.expr}" for op in t.effects) + " }"
-                transitions.append(t_str)'''
-        s_table.cell(7, 1).text = transitions
+        transitions = []
+        if model_state is not None:
+            for transition in model_state.transitions:
+                transition_text = format_transition_item(transition)
+                if transition_text:
+                    transitions.append(f"{transition_text};")
+        s_table.cell(7, 1).text = "\n".join(transitions)
         for row in s_table.rows:
             for cell in row.cells:
                 center_text_in_cell(cell)

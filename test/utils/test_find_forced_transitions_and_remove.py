@@ -44,9 +44,9 @@ state Top {
         forced, new_text = find_and_remove_forced_transitions(dsl)
         self.assertEqual(len(forced), 2)
         found = {f['state']: f['block'] for f in forced}
-        self.assertIn('Sub1', found)
+        self.assertIn('Top.Sub1', found)
         self.assertIn('Top', found)
-        self.assertIn('! * -> Sub2 : if [a == 1];', found['Sub1'])
+        self.assertIn('! * -> Sub2 : if [a == 1];', found['Top.Sub1'])
         self.assertIn('! * -> Sub1 : if [b == 2];', found['Top'])
         self.assertNotIn('! * -> Sub2 : if [a == 1];', new_text)
         self.assertNotIn('! * -> Sub1 : if [b == 2];', new_text)
@@ -91,8 +91,8 @@ state Root {
         forced, new_text = find_and_remove_forced_transitions(dsl)
         self.assertEqual(len(forced), 4)
         found = {(f['state'], f['block'].split('->')[1].split(':')[0].strip()): f['block'] for f in forced}
-        self.assertIn(('A', 'B'), found)
-        self.assertIn(('B', 'C'), found)
+        self.assertIn(('Root.A', 'B'), found)
+        self.assertIn(('Root.A.B', 'C'), found)
         self.assertIn(('Root', 'D'), found)
         self.assertIn(('Root', 'A'), found)
         for f in forced:

@@ -1,139 +1,156 @@
 import pytest
-from PyQt5 import QtCore, QtGui, QtWidgets
-from PyQt5.QtCore import QTimerEvent, Qt, QPoint
-import os
-from app.utils import create_formlayout_dialog
-from app.widget import AppMainWindow, DialogEditState
+from PyQt5 import QtCore, QtWidgets
+
+from app.model import State, StateManager
+from app.widget import AppMainWindow
 from app.widget import main_window
-from pyfcstm.model import NormalState, CompositeState, StateType, State
+
 
 @pytest.mark.unittest
 class TestMainWindow:
     @pytest.fixture
-    def get_window(self, qtbot):
+    def window(self, qtbot):
         window = AppMainWindow()
         qtbot.addWidget(window)
-        return qtbot, window
+        return window
 
-    @pytest.fixture
-    def new_state_chart(self,monkeypatch, get_window):
-        qtbot, window = get_window
+    def test_new_button_opens_editor_with_empty_state_manager(self, qtbot, window):
+        assert window.stackedWidget_state_machine.currentIndex() == 0
+        assert not hasattr(window, "state_manager")
 
-        def fake_dialog(*args, **kwargs):
-            return True, ["TestFSM"]
-
-        monkeypatch.setattr(main_window, "create_formlayout_dialog", fake_dialog)
-
-        qtbot.mouseClick(window.button_initial_new_state_machine, QtCore.Qt.LeftButton)
-        assert window.stackedWidget_state_machine.currentIndex() == 1
-
-        return qtbot, window
-
-    def find_top_level_menus(self):
-        return [w for w in QtWidgets.QApplication.topLevelWidgets() if isinstance(w, QtWidgets.QMenu)]
-
-    def test_statechart_name(self, new_state_chart):
-        qtbot, window = new_state_chart
-        assert window.state_chart.name == "TestFSM"
-
-    def test_state_option(self, new_state_chart):
-        qtbot, window = new_state_chart
-        #获取根状态节点
-        root_item = window.tree_state_machine_all_state.topLevelItem(0)
-        assert root_item is not None
-
-        #模拟右键点击根状态节点
-        #pos = window.tree_state_machine_all_state.visualItemRect(root_item).center()
-        #print(pos)
-        #qtbot.mouseClick(window.tree_state_machine_all_state.viewport(), Qt.RightButton, pos=pos)
-        global_pos = window.tree_state_machine_all_state.viewport().mapToGlobal(
-            window.tree_state_machine_all_state.visualItemRect(root_item).center()
+        qtbot.mouseClick(
+            window.button_initial_new_state_machine,
+            QtCore.Qt.LeftButton,
         )
-        local_pos = window.mapFromGlobal(global_pos)
 
-        # 模拟右键点击
-        qtbot.mouseClick(window, Qt.RightButton, pos=global_pos)
-        #获取上下文菜单
-        context_menu = None
-        for widget in QtWidgets.QApplication.topLevelWidgets():
-            if isinstance(widget, QtWidgets.QMenu):
-                print(widget)
-                context_menu = widget
+        assert window.stackedWidget_state_machine.currentIndex() == 1
+        assert window.at_page_initial is False
+        assert isinstance(window.state_manager, StateManager)
+        assert window.state_manager.get_root_state() is None
 
-        assert context_menu is not None
-        assert isinstance(context_menu, QtWidgets.QMenu)
-        #menus = self.find_top_level_menus()
-        #assert len(menus) == 1
-        #context_menu = menus[0]
-
-        print("###")
-        print(context_menu)
-        print("###")
-        #找到并点击"添加子状态"选项
-        add_action = None
-        for action in context_menu.actions():
-            if action.text() == "添加子状态":
-                add_action = action
-                break
-        assert add_action is not None
-        add_action.trigger()
-
-        # 5. 获取弹出的对话框
-        dialog = window.findChild(DialogEditState)
-        assert dialog is not None
-
-        # 6. 填写对话框内容
-        qtbot.keyClicks(dialog.edit_state_name, "test_add_state")
-        qtbot.keyClicks(dialog.edit_state_description, "test state")
-        dialog.combo_state_type.setCurrentText("normal")  # 设置为普通状态
-        qtbot.keyClicks(dialog.edit_min_time, "1")
-        qtbot.keyClicks(dialog.edit_max_time, "10")
-        qtbot.keyClicks(dialog.edit_state_entry, "1")
-        qtbot.keyClicks(dialog.edit_state_during, "2")
-        qtbot.keyClicks(dialog.edit_state_exit, "3")
-
-        # 7. 点击确定按钮
-        ok_button = dialog.findChild(QtWidgets.QPushButton, "button_accept")
-        assert ok_button is not None
-        qtbot.mouseClick(ok_button, Qt.LeftButton)
-
-        # 8. 验证子状态是否添加成功
-        # 检查树中是否有新添加的子状态
-        child_item = root_item.child(0)
-        assert child_item is not None
-        assert child_item.text(0) == "test_add_state"
-
-        # 检查状态对象是否正确创建
-        child_state = child_item.data(0, Qt.UserRole)
-        assert child_state is not None
-        assert isinstance(child_state, NormalState)
-        assert child_state.name == "test_add_state"
-        assert child_state.description == "test state"
-        assert child_state.type == NormalState
-        assert child_state.min_time_lock == 1
-        assert child_state.max_time_lock == 10
-        assert child_state.on_entry == "1"
-        assert child_state.on_during == "2"
-        assert child_state.on_exit == "3"
-
-        # 检查父状态是否正确设置
-        assert child_state in window.state_chart.root_state.states
-        assert window.d_id_father_state[child_state.id] == window.state_chart.root_state
-
-    def test_import_statechart(self, monkeypatch, get_window, tmp_path):
-        qtbot, window = main_window
-        json_file = "../ui/ui/export_data/test_json.json"
-        json_file = "../../app/ui/ui/export_data/test_json.json"
+    def test_import_valid_fcstm_updates_model_and_editor(
+        self, monkeypatch, qtbot, window, tmp_path
+    ):
+        source = tmp_path / "traffic.fcstm"
+        source.write_text(
+            """
+def int count = 0;
+state TrafficLight {
+    state Red;
+    state Green;
+    [*] -> Red;
+    Red -> Green : if [count >= 1];
+}
+""".strip(),
+            encoding="utf-8",
+        )
         monkeypatch.setattr(
             QtWidgets.QFileDialog,
             "getOpenFileName",
-            lambda *args, **kwargs: (str(json_file), "JSON Files (*.json)")
+            lambda *args, **kwargs: (str(source), "fcstm Files (*.fcstm)"),
         )
 
         window._import_statechart()
 
-        assert window.state_chart is not None
-        assert window.state_chart.name == "1234"
-        assert "".join(window.state_chart.preamble) == ""
-        assert window.state_chart.root_state.name == "start2"
+        manager = window.state_manager
+        assert manager.get_root_state().name == "TrafficLight"
+        assert [child.name for child in manager.get_root_state().children] == [
+            "Red",
+            "Green",
+        ]
+        assert manager.variable_definitions == "def int count = 0;"
+        assert window.edit_var_def.toPlainText() == manager.variable_definitions
+        assert window.tree_all_state.topLevelItem(0).text(0) == "TrafficLight"
+        assert window.tree_all_state.topLevelItem(0).childCount() == 2
+        assert window.stackedWidget_state_machine.currentIndex() == 1
+        assert window.at_page_initial is False
+        assert window.state_machine_file_path == str(tmp_path)
 
+    def test_import_failure_preserves_existing_state_manager(
+        self, monkeypatch, window, tmp_path
+    ):
+        original = StateManager(State("Existing"))
+        original.variable_definitions = "def int value = 7;"
+        window.state_manager = original
+
+        invalid_source = tmp_path / "broken.fcstm"
+        invalid_source.write_text("state Broken { state Child;", encoding="utf-8")
+        monkeypatch.setattr(
+            QtWidgets.QFileDialog,
+            "getOpenFileName",
+            lambda *args, **kwargs: (
+                str(invalid_source),
+                "fcstm Files (*.fcstm)",
+            ),
+        )
+        messages = []
+        monkeypatch.setattr(
+            QtWidgets.QMessageBox,
+            "critical",
+            lambda parent, title, text, *args, **kwargs: messages.append(
+                (title, text)
+            ),
+        )
+
+        window._import_statechart()
+
+        assert window.state_manager is original
+        assert window.state_manager.get_root_state().name == "Existing"
+        assert messages
+        assert messages[0][0] == "导入失败"
+        assert "解析fcstm文件时发生错误" in messages[0][1]
+
+    def test_add_button_creates_root_then_child_without_blocking_dialog(
+        self, monkeypatch, qtbot, window
+    ):
+        class AcceptedStateDialog:
+            names = iter(("Root", "Child"))
+
+            def __init__(self, *args, **kwargs):
+                self.name = next(self.names)
+
+            def exec_(self):
+                return QtWidgets.QDialog.Accepted
+
+            def get_state_name(self):
+                return self.name
+
+        monkeypatch.setattr(main_window, "DialogEditState", AcceptedStateDialog)
+        qtbot.mouseClick(
+            window.button_initial_new_state_machine,
+            QtCore.Qt.LeftButton,
+        )
+
+        qtbot.mouseClick(window.button_add_state, QtCore.Qt.LeftButton)
+        root_item = window.tree_all_state.topLevelItem(0)
+        assert root_item.text(0) == "Root"
+        assert root_item.data(0, QtCore.Qt.UserRole) is window.state_manager.root_state
+
+        window.tree_all_state.setCurrentItem(root_item)
+        qtbot.mouseClick(window.button_add_state, QtCore.Qt.LeftButton)
+
+        child_item = root_item.child(0)
+        root_state = window.state_manager.root_state
+        assert child_item.text(0) == "Child"
+        assert [state.name for state in root_state.children] == ["Child"]
+        assert root_state.children[0].parent is root_state
+        assert window.state_manager.get_state_by_path("Root.Child") is root_state.children[0]
+
+    def test_menu_actions_are_connected_to_window_commands(self, window):
+        file_actions = window.menu_file.actions()
+        tool_actions = window.menu_tool.actions()
+
+        assert window.action_import_state_machine in file_actions
+        assert window.action_export_state_machine in file_actions
+        assert window.action_validate_state_machine in tool_actions
+        assert window.action_graph_gen in tool_actions
+        assert window.action_code_gen in tool_actions
+
+        for action in (
+            window.action_import_state_machine,
+            window.action_export_state_machine,
+            window.action_validate_state_machine,
+            window.action_graph_gen,
+            window.action_code_gen,
+        ):
+            assert action.receivers(action.triggered) >= 1

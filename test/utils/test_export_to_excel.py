@@ -15,51 +15,65 @@ class TestExportToExcel(unittest.TestCase):
     def setUp(self):
         """设置测试环境，创建一个简单的状态机"""
         # 创建根状态
-        self.root_state = State(name="TrafficLight", transition="", lifecycle="", parent=None, children=[])
+        self.root_state = State(
+            name="TrafficLight",
+            transitions=[
+                {"source": "[*]", "target": "InService", "event": "", "condition": "", "action": ""},
+                {"source": "InService", "target": "Idle", "event": ": Maintain", "condition": "", "action": ""},
+                {"source": "! *", "target": "Idle", "event": "", "condition": "a >= 20", "action": ""},
+            ],
+        )
         self.state_manager = StateManager(self.root_state)
         
         # 添加InService状态
         self.in_service = State(
             name="InService",
-            transition="[*] -> Red :: Start effect {\n    b = 0x1;\n}",
-            lifecycle="enter {\n    a = 0;\n    b = 0;\n}\nenter abstract InServiceAbstractEnter /*\n    Abstract Operation\n*/",
-            parent="TrafficLight",
-            children=[]
+            transitions=[{
+                "source": "[*]",
+                "target": "Red",
+                "event": ": Start",
+                "condition": "",
+                "action": "b = 1",
+            }],
+            lifecycle=[
+                {
+                    "type": "enter",
+                    "name": "",
+                    "action": "a = 0; b = 0",
+                    "is_abstract": False,
+                    "comment": "",
+                },
+                {
+                    "type": "enter",
+                    "name": "InServiceAbstractEnter",
+                    "action": "",
+                    "is_abstract": True,
+                    "comment": "/* Abstract Operation */",
+                },
+            ],
         )
         self.state_manager.add_state(self.root_state, self.in_service)
         
         # 添加Red状态
         self.red_state = State(
             name="Red",
-            transition="",
-            lifecycle="during {\n    a = 0x1 << 2;\n}",
-            parent="InService",
-            children=[]
+            lifecycle=[{
+                "type": "during",
+                "name": "",
+                "action": "a = 1 << 2",
+                "is_abstract": False,
+                "comment": "",
+            }],
         )
         self.state_manager.add_state(self.in_service, self.red_state)
         
         # 添加Yellow状态
-        self.yellow_state = State(
-            name="Yellow",
-            transition="",
-            lifecycle="",
-            parent="InService",
-            children=[]
-        )
+        self.yellow_state = State(name="Yellow")
         self.state_manager.add_state(self.in_service, self.yellow_state)
         
         # 添加Idle状态
-        self.idle_state = State(
-            name="Idle",
-            transition="",
-            lifecycle="",
-            parent="TrafficLight",
-            children=[]
-        )
+        self.idle_state = State(name="Idle")
         self.state_manager.add_state(self.root_state, self.idle_state)
-        
-        # 设置根状态转移
-        self.root_state.transition = "[*] -> InService;\nInService -> Idle :: Maintain;\n! * -> Idle : if [a >= 20];"
         
         # 设置变量定义
         self.state_manager.variable_definitions = "def int a = 0;\ndef int b = 0x0;"

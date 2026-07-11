@@ -6,35 +6,43 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../.
 
 from app.model import State, StateManager
 from app.utils.ui_to_dsl import state_manager_to_dsl
-from app.utils.dsl_to_ui import parse_fcstm_file, convert_state_machine_to_state_manager
+from app.utils.dsl_to_ui import dsl_to_state_manager
 
 
 class TestUiToDsl(unittest.TestCase):
     def test_state_manager_to_dsl_simple(self):
         """测试简单的StateManager转换为DSL"""
-        root_state = State(name="TestMachine", transition="", lifecycle="", parent=None, children=[])
+        root_state = State(
+            name="TestMachine",
+            transitions=[
+                {"source": "[*]", "target": "Idle", "event": "", "condition": "", "action": ""},
+                {"source": "Idle", "target": "Active", "event": "", "condition": "start_flag == 1", "action": ""},
+                {"source": "Active", "target": "Idle", "event": "", "condition": "stop_flag == 1", "action": ""},
+            ],
+        )
         state_manager = StateManager(root_state)
         
         # 添加子状态
         idle_state = State(
-            name="Idle", 
-            transition="", 
-            lifecycle="enter {\n    count = 0;\n}", 
-            parent="TestMachine", 
-            children=[]
+            name="Idle",
+            lifecycle=[{
+                "type": "enter",
+                "name": "",
+                "action": "count = 0",
+                "is_abstract": False,
+                "comment": "",
+            }],
         )
         state_manager.add_state(root_state, idle_state)
         
         active_state = State(
-            name="Active", 
-            transition="[*] -> Running;\nRunning -> Paused : if [count > 10];", 
-            lifecycle="", 
-            parent="TestMachine", 
-            children=[]
+            name="Active",
+            transitions=[
+                {"source": "[*]", "target": "Running", "event": "", "condition": "", "action": ""},
+                {"source": "Running", "target": "Paused", "event": "", "condition": "count > 10", "action": ""},
+            ],
         )
         state_manager.add_state(root_state, active_state)
-
-        root_state.transition = "[*] -> Idle;\nIdle -> Active : if [start_flag == 1];\nActive -> Idle : if [stop_flag == 1];"
 
         state_manager.variable_definitions = "def int count = 0;\ndef int start_flag = 0;\ndef int stop_flag = 0;"
 
@@ -65,39 +73,66 @@ class TestUiToDsl(unittest.TestCase):
     
     def test_state_manager_to_dsl_complex(self):
         """测试复杂的StateManager转换为DSL，包含嵌套状态和操作"""
-        root_state = State(name="TrafficLight", transition="", lifecycle="", parent=None, children=[])
+        root_state = State(
+            name="TrafficLight",
+            transitions=[
+                {"source": "[*]", "target": "InService", "event": "", "condition": "", "action": ""},
+                {"source": "InService", "target": "Idle", "event": ": Maintain", "condition": "", "action": ""},
+                {"source": "Idle", "target": "[*]", "event": "", "condition": "", "action": ""},
+                {"source": "! *", "target": "Idle", "event": "", "condition": "a >= 20", "action": ""},
+            ],
+        )
         state_manager = StateManager(root_state)
         
         # 添加InService状态
         in_service = State(
-            name="InService", 
-            transition="[*] -> Red :: Start effect {\n    b = 0x1;\n}\nRed -> Green effect {\n    b = 0x3;\n}\nGreen -> Yellow effect {\n    b = 0x2;\n}\nYellow -> Red : if [a >= 10] effect {\n    b = 0x1;\n    round_count = round_count + 1;\n}", 
-            lifecycle="enter {\n    a = 0;\n    b = 0;\n    round_count = 0;\n}\nenter abstract InServiceAbstractEnter /*\n    Abstract Operation When Entering State 'InService'\n    TODO: Should be Implemented In Generated Code Framework\n*/", 
-            parent="TrafficLight", 
-            children=[]
+            name="InService",
+            transitions=[
+                {"source": "[*]", "target": "Red", "event": ": Start", "condition": "", "action": "b = 1"},
+                {"source": "Red", "target": "Green", "event": "", "condition": "", "action": "b = 3"},
+                {"source": "Green", "target": "Yellow", "event": "", "condition": "", "action": "b = 2"},
+                {"source": "Yellow", "target": "Red", "event": "", "condition": "a >= 10", "action": "b = 1; round_count = round_count + 1"},
+            ],
+            lifecycle=[
+                {
+                    "type": "enter",
+                    "name": "",
+                    "action": "a = 0; b = 0; round_count = 0",
+                    "is_abstract": False,
+                    "comment": "",
+                },
+                {
+                    "type": "enter",
+                    "name": "InServiceAbstractEnter",
+                    "action": "",
+                    "is_abstract": True,
+                    "comment": "/* Abstract Operation */",
+                },
+            ],
         )
         state_manager.add_state(root_state, in_service)
         
         # 添加Red状态
         red_state = State(
-            name="Red", 
-            transition="", 
-            lifecycle="during {\n    a = 0x1 << 2;\n}", 
-            parent="InService", 
-            children=[]
+            name="Red",
+            lifecycle=[{
+                "type": "during",
+                "name": "",
+                "action": "a = 1 << 2",
+                "is_abstract": False,
+                "comment": "",
+            }],
         )
         state_manager.add_state(in_service, red_state)
         
         # 添加Yellow和Green状态
-        yellow_state = State(name="Yellow", transition="", lifecycle="", parent="InService", children=[])
-        green_state = State(name="Green", transition="", lifecycle="", parent="InService", children=[])
+        yellow_state = State(name="Yellow")
+        green_state = State(name="Green")
         state_manager.add_state(in_service, yellow_state)
         state_manager.add_state(in_service, green_state)
 
-        idle_state = State(name="Idle", transition="", lifecycle="", parent="TrafficLight", children=[])
+        idle_state = State(name="Idle")
         state_manager.add_state(root_state, idle_state)
-
-        root_state.transition = "[*] -> InService;\nInService -> Idle :: Maintain;\nIdle -> [*];\n! * -> Idle : if [a >= 20];"
 
         state_manager.variable_definitions = "def int a = 0;\ndef int b = 0x0;\ndef int round_count = 0;"
         
@@ -110,22 +145,8 @@ class TestUiToDsl(unittest.TestCase):
             temp_path = temp.name
         
         try:
-            state_machine, variable_definitions, forced = parse_fcstm_file(temp_path)
-
-            new_state_manager = convert_state_machine_to_state_manager(state_machine, variable_definitions)
-
+            new_state_manager = dsl_to_state_manager(temp_path)
             new_dsl_content = state_manager_to_dsl(new_state_manager)
-
-            if len(forced) > 0:
-                for forced_item in forced:
-                    forced_state = new_state_manager.get_state(forced_item['state'])
-                    if forced_state:
-                        # 清理前导空格
-                        cleaned_lines = [line.lstrip() for line in forced_item['block'].splitlines()]
-                        forced_transition = '\n'.join(cleaned_lines)
-                        forced_state.transition += f'\n{forced_transition}'
-
-                new_dsl_content = state_manager_to_dsl(new_state_manager)
 
             self.assertIn("def int a = 0;", new_dsl_content)
             self.assertIn("def int b = 0x0;", new_dsl_content)
@@ -141,7 +162,7 @@ class TestUiToDsl(unittest.TestCase):
             
             # 验证转移
             self.assertIn("[*] -> InService;", new_dsl_content)
-            self.assertIn("InService -> Idle :: Maintain;", new_dsl_content)
+            self.assertIn("InService -> Idle : Maintain;", new_dsl_content)
             self.assertIn("Idle -> [*];", new_dsl_content)
             self.assertIn("! * -> Idle : if [a >= 20];", new_dsl_content)
             

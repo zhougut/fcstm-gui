@@ -13,7 +13,7 @@ jobs:
       matrix:
         include:
           - {os: ubuntu-22.04, label: linux-x86_64, executable: fcstm-gui}
-          - {os: windows-2022, label: windows-x86_64-win7, executable: fcstm-gui.exe}
+          - {os: windows-2022, label: windows-x86_64, executable: fcstm-gui.exe}
           - {os: macos-15-intel, label: macos-x86_64, executable: fcstm-gui}
     runs-on: ${{ matrix.os }}
     steps:
@@ -46,13 +46,74 @@ jobs:
           if [ -n "${CAIRO_BIN:-}" ]; then export PATH="$PATH:$CAIRO_BIN"; fi
           python -m pip install -r requirements-build.txt -r requirements-test.txt -r requirements.txt
           make ui
+      - name: Verify pinned pyfcstm source
+        shell: bash
+        env:
+          PYFCSTM_EXPECTED_COMMIT: f142a656df43e0b80ed6b7ac63b0696345325646
+          PYFCSTM_TARGET_LABEL: ${{ matrix.label }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+
+          import importlib_metadata
+
+          expected = os.environ['PYFCSTM_EXPECTED_COMMIT']
+          label = os.environ['PYFCSTM_TARGET_LABEL']
+          distribution = importlib_metadata.distribution('pyfcstm')
+          raw_direct_url = distribution.read_text('direct_url.json')
+
+          direct_url = {}
+          parse_error = None
+          if raw_direct_url:
+              try:
+                  direct_url = json.loads(raw_direct_url)
+              except (TypeError, ValueError) as exc:
+                  parse_error = str(exc)
+
+          vcs_info = direct_url.get('vcs_info') or {}
+          installed = vcs_info.get('commit_id')
+          requested = vcs_info.get('requested_revision')
+          source_url = direct_url.get('url')
+          passed = installed == expected and parse_error is None
+
+          def shown(value):
+              return value if value is not None else '<missing>'
+
+          summary_lines = [
+              '### pyfcstm dependency provenance ({})'.format(label),
+              '',
+              '- Status: **{}**'.format('PASS' if passed else 'FAIL'),
+              '- Expected commit: `{}`'.format(expected),
+              '- Installed commit: `{}`'.format(shown(installed)),
+              '- Requested revision: `{}`'.format(shown(requested)),
+              '- Source URL: `{}`'.format(shown(source_url)),
+              '- Evidence: `direct_url.json`',
+          ]
+          if parse_error is not None:
+              summary_lines.append('- Parse error: `{}`'.format(parse_error))
+          summary = '\n'.join(summary_lines) + '\n'
+          print(summary)
+
+          summary_path = os.environ.get('GITHUB_STEP_SUMMARY')
+          if summary_path:
+              with open(summary_path, 'a', encoding='utf-8') as summary_file:
+                  summary_file.write(summary)
+
+          if not passed:
+              raise SystemExit(
+                  'pyfcstm source mismatch: expected {}, installed {}'.format(
+                      expected, shown(installed)
+                  )
+              )
+          PY
       - name: Tests and source self-check
         shell: bash
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
           if [ -n "${CAIRO_BIN:-}" ]; then export PATH="$PATH:$CAIRO_BIN"; fi
-          python -m pytest test/config/test_meta.py
+          python -m pytest test -q
           python main.py --self-check
       - name: Build and smoke-test onedir
         shell: bash
@@ -95,7 +156,7 @@ jobs:
       matrix:
         include:
           - {os: ubuntu-22.04, label: linux-x86_64, executable: fcstm-gui}
-          - {os: windows-2022, label: windows-x86_64-win7, executable: fcstm-gui.exe}
+          - {os: windows-2022, label: windows-x86_64, executable: fcstm-gui.exe}
           - {os: macos-15-intel, label: macos-x86_64, executable: fcstm-gui}
     runs-on: ${{ matrix.os }}
     steps:

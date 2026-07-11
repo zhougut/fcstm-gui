@@ -1,4 +1,4 @@
-pyfcstm @ git+https://github.com/HansBug/pyfcstm.git@dev/s714-acceptance-artifacts
+pyfcstm @ git+https://github.com/HansBug/pyfcstm.git@f142a656df43e0b80ed6b7ac63b0696345325646
 
 PyQt5==5.15.9
 PyQt5-sip==12.12.2

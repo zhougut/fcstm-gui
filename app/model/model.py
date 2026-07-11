@@ -158,17 +158,37 @@ class StateManager:
         """
         移除状态及其所有子状态
         """
-        if state == self.root_state:
+        removing_root = state is self.root_state
+        if removing_root:
             self.root_state = None
-        
-        # 递归移除所有子状态
-        for child in list(state.children):
-            self.remove_state(child)
-        
-        # 从父状态中移除
-        if state.parent is not None:
+        elif state.parent is not None:
             state.parent.remove_child(state)
-        
+
+        # State trees normally cannot contain cycles, but imported or manually
+        # mutated data can.  Tear the subtree down iteratively so a malformed
+        # back edge cannot recurse forever or pull the retained root into a
+        # child-subtree deletion.
+        retained_root = self.root_state
+        pending = [state]
+        visited = set()
+        while pending:
+            current = pending.pop()
+            state_id = id(current)
+            if state_id in visited:
+                continue
+            visited.add(state_id)
+
+            for child in list(current.children):
+                if child is retained_root:
+                    if retained_root.parent is current:
+                        retained_root.parent = None
+                    continue
+                if child.parent is current:
+                    pending.append(child)
+
+            current.children.clear()
+            current.parent = None
+
         self._rebuild_states_dict()
 
     def get_root_state(self) -> Optional[State]:

@@ -1,16 +1,35 @@
 import unittest
 from app.model.model import State, StateManager
 
+
 class TestStateAndStateManager(unittest.TestCase):
     def test_state_creation_and_repr(self):
         child_state = State(name="B")
-        s = State(name="A", transition="A -> B;", lifecycle="enter { x = 1; }", parent=None, children=[child_state])
+        transitions = [{
+            "source": "A",
+            "target": "B",
+            "event": "",
+            "condition": "",
+            "action": "",
+        }]
+        lifecycle = [{
+            "type": "enter",
+            "name": "",
+            "action": "x = 1",
+            "is_abstract": False,
+            "comment": "",
+        }]
+        s = State(
+            name="A",
+            transitions=transitions,
+            lifecycle=lifecycle,
+            children=[child_state],
+        )
         self.assertEqual(s.name, "A")
-        self.assertEqual(s.transition, "A -> B;")
-        self.assertEqual(s.lifecycle, "enter { x = 1; }")
+        self.assertEqual(s.transitions, transitions)
+        self.assertEqual(s.lifecycle, lifecycle)
         self.assertIsNone(s.parent)
-        self.assertEqual(len(s.children), 1)
-        self.assertEqual(s.children[0].name, "B")
+        self.assertEqual(s.children, [child_state])
         self.assertIn("State(name=A", repr(s))
 
     def test_add_and_get_state(self):
@@ -75,9 +94,35 @@ class TestStateAndStateManager(unittest.TestCase):
         # 手动制造循环（虽然新结构中这不太可能发生）
         s2.children.append(root)
         sm.remove_state(root)
-        self.assertIsNone(sm.get_state("Root"))
-        self.assertIsNone(sm.get_state("S1"))
-        self.assertIsNone(sm.get_state("S2"))
+        self.assertIsNone(sm.get_root_state())
+        self.assertEqual(sm.states, {})
+        self.assertEqual(root.children, [])
+        self.assertEqual(s1.children, [])
+        self.assertEqual(s2.children, [])
+        self.assertIsNone(s1.parent)
+        self.assertIsNone(s2.parent)
+
+    def test_remove_cyclic_subtree_does_not_remove_root(self):
+        root = State("Root")
+        sm = StateManager(root)
+        child = State("Child")
+        grandchild = State("Grandchild")
+        sm.add_state(root, child)
+        sm.add_state(child, grandchild)
+        # A malformed owning back edge must not pull the root into the subtree
+        # being removed or leave the retained root pointing at removed data.
+        grandchild.add_child(root)
+
+        sm.remove_state(child)
+
+        self.assertIs(sm.get_root_state(), root)
+        self.assertEqual(sm.get_all_states(), [root])
+        self.assertIsNone(root.parent)
+        self.assertEqual(root.children, [])
+        self.assertIsNone(child.parent)
+        self.assertEqual(child.children, [])
+        self.assertIsNone(grandchild.parent)
+        self.assertEqual(grandchild.children, [])
 
 if __name__ == "__main__":
     unittest.main()

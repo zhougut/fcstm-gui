@@ -173,38 +173,18 @@ def export_statechart_to_excel(state_manager: StateManager, file_path: str):
 
     # 识别并添加强制转移信息
     row = 2
-    for state_name, state in state_manager.states.items():
-        if state.transition:
-            for line in state.transition.split('\n'):
-                line = line.strip()
-                if line.startswith('!'):
-                    forced_sheet.cell(row=row, column=1).value = state_name
+    for state in state_manager.get_all_states():
+        for transition in state.transitions:
+            source = transition.get("source", "")
+            if not source.startswith("!"):
+                continue
 
-                    # 尝试解析强制转移
-                    parts = line.split('->')
-                    if len(parts) >= 2:
-                        # 源状态
-                        src = parts[0].replace('!', '').strip()
-                        forced_sheet.cell(row=row, column=2).value = src
-
-                        # 目标状态和其他信息
-                        dst_parts = parts[1].split(':')
-                        dst = dst_parts[0].strip()
-                        forced_sheet.cell(row=row, column=3).value = dst
-
-                        # 提取条件
-                        if len(dst_parts) > 1 and 'if [' in parts[1]:
-                            condition = parts[1].split('if [')[1].split(']')[0]
-                            forced_sheet.cell(row=row, column=4).value = condition
-
-                        # 提取动作
-                        if 'effect {' in line:
-                            effect_part = line.split('effect {')[1]
-                            if '}' in effect_part:
-                                effect = effect_part.split('}')[0].strip()
-                                forced_sheet.cell(row=row, column=5).value = effect
-
-                    row += 1
+            forced_sheet.cell(row=row, column=1).value = state.get_full_path()
+            forced_sheet.cell(row=row, column=2).value = source[1:].strip()
+            forced_sheet.cell(row=row, column=3).value = transition.get("target", "")
+            forced_sheet.cell(row=row, column=4).value = transition.get("condition", "")
+            forced_sheet.cell(row=row, column=5).value = transition.get("action", "")
+            row += 1
 
     # 调整列宽
     for col in range(1, len(forced_headers) + 1):
@@ -212,4 +192,3 @@ def export_statechart_to_excel(state_manager: StateManager, file_path: str):
 
     # 保存工作簿
     wb.save(file_path)
-

@@ -70,9 +70,14 @@ state Test {
             child_state = state_manager.get_state("Child")
             self.assertIsNotNone(child_state)
             self.assertEqual(child_state.name, "Child")
-            self.assertEqual(child_state.parent, "Test")
-            self.assertIn("enter {", child_state.lifecycle)
-            self.assertIn("a = 1;", child_state.lifecycle)
+            self.assertIs(child_state.parent, state_manager.root_state)
+            self.assertEqual(child_state.lifecycle, [{
+                "type": "enter",
+                "name": "",
+                "action": "a = 1",
+                "is_abstract": False,
+                "comment": "",
+            }])
 
             self.assertEqual(state_manager.variable_definitions, "def int a = 0;")
         finally:
@@ -98,8 +103,37 @@ state Test {
             
             # 验证强制转移被正确添加
             root_state = state_manager.get_root_state()
-            self.assertIn("! * -> B : if [a >= 10];", root_state.transition)
+            self.assertIn({
+                "source": "! *",
+                "target": "B",
+                "event": "",
+                "condition": "a >= 10",
+                "action": "",
+            }, root_state.transitions)
             
+        finally:
+            os.unlink(temp_path)
+
+    def test_local_event_scope_is_preserved(self):
+        dsl_content = """
+state Root {
+    state A;
+    state B;
+    [*] -> A;
+    A -> B :: Go;
+}
+"""
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.fcstm') as temp:
+            temp.write(dsl_content)
+            temp_path = temp.name
+
+        try:
+            state_manager = dsl_to_state_manager(temp_path)
+            transition = next(
+                item for item in state_manager.root_state.transitions
+                if item["source"] == "A" and item["target"] == "B"
+            )
+            self.assertEqual(transition["event"], ":: Go")
         finally:
             os.unlink(temp_path)
 
@@ -164,15 +198,20 @@ state TrafficLight {
             # 验证InService状态
             in_service = state_manager.get_state("InService")
             self.assertIsNotNone(in_service)
-            self.assertEqual(in_service.parent, "TrafficLight")
+            self.assertIs(in_service.parent, root_state)
             self.assertEqual(len(in_service.children), 3)
             
             # 验证Red状态
             red_state = state_manager.get_state("Red")
             self.assertIsNotNone(red_state)
-            self.assertEqual(red_state.parent, "InService")
-            self.assertIn("during {", red_state.lifecycle)
-            self.assertIn("a = 1 << 2;", red_state.lifecycle)
+            self.assertIs(red_state.parent, in_service)
+            self.assertEqual(red_state.lifecycle, [{
+                "type": "during",
+                "name": "",
+                "action": "a = 1 << 2",
+                "is_abstract": False,
+                "comment": "",
+            }])
             
             # 验证Yellow和Green状态
             yellow_state = state_manager.get_state("Yellow")
@@ -183,24 +222,35 @@ state TrafficLight {
             # 验证Idle状态
             idle_state = state_manager.get_state("Idle")
             self.assertIsNotNone(idle_state)
-            self.assertEqual(idle_state.parent, "TrafficLight")
+            self.assertIs(idle_state.parent, root_state)
             
             # 验证根状态的转移
-            self.assertIn("[*] -> InService;", root_state.transition)
-            self.assertIn("InService -> Idle :: Maintain;", root_state.transition)
-            self.assertIn("Idle -> [*];", root_state.transition)
-            self.assertIn("! * -> Idle : if [a >= 20];", root_state.transition)
+            root_edges = {
+                (item["source"], item["target"]): item
+                for item in root_state.transitions
+            }
+            self.assertEqual(root_edges[("[*]", "InService")]["event"], "")
+            self.assertEqual(root_edges[("InService", "Idle")]["event"], ":: Maintain")
+            self.assertIn(("Idle", "[*]"), root_edges)
+            self.assertEqual(root_edges[("! *", "Idle")]["condition"], "a >= 20")
             
             # 验证InService状态的转移
-            self.assertIn("[*] -> Red :: Start effect {", in_service.transition)
-            self.assertIn("b = 1;", in_service.transition)
-            self.assertIn("Red -> Green effect {", in_service.transition)
-            self.assertIn("b = 3;", in_service.transition)
+            service_edges = {
+                (item["source"], item["target"]): item
+                for item in in_service.transitions
+            }
+            self.assertEqual(service_edges[("[*]", "Red")]["event"], ":: Start")
+            self.assertEqual(service_edges[("[*]", "Red")]["action"], "b = 1")
+            self.assertEqual(service_edges[("Red", "Green")]["action"], "b = 3")
             
             # 验证InService状态的生命周期
-            self.assertIn("enter {", in_service.lifecycle)
-            self.assertIn("a = 0;", in_service.lifecycle)
-            self.assertIn("enter abstract InServiceAbstractEnter", in_service.lifecycle)
+            concrete_enter, abstract_enter = in_service.lifecycle
+            self.assertEqual(
+                concrete_enter["action"],
+                "a = 0; b = 0; round_count = 0",
+            )
+            self.assertTrue(abstract_enter["is_abstract"])
+            self.assertEqual(abstract_enter["name"], "InServiceAbstractEnter")
             
             # 验证变量定义
             self.assertEqual(state_manager.variable_definitions, "def int a = 0;\ndef int b = 0x0;\ndef int round_count = 0;")

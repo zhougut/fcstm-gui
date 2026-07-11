@@ -216,7 +216,9 @@ def convert_fcstm_state_to_my_state(fcstm_state: State, parent_state: Optional[M
             if hasattr(cur_transition, 'event') and cur_transition.event:
                 try:
                     # 将转移转换为AST节点
-                    ast_node = fcstm_state.transition_to_ast_node(cur_transition)
+                    ast_node = type(fcstm_state).transition_to_ast_node(
+                        fcstm_state, cur_transition
+                    )
                     
                     # 仿照AST节点的__str__方法提取事件部分
                     if ast_node.event_id is not None:
@@ -227,7 +229,7 @@ def convert_fcstm_state_to_my_state(fcstm_state: State, parent_state: Optional[M
                             event = f":: {ast_node.event_id.path[-1]}"
                         else:
                             event = f": {ast_node.event_id}"
-                except:
+                except Exception:
                     # 如果AST方法失败，回退到原始方法
                     if hasattr(cur_transition.event, 'name'):
                         event = cur_transition.event.name
