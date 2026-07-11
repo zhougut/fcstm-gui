@@ -29,12 +29,14 @@ class State:
 
     def __init__(self, name: str, transitions: Optional[List[Dict[str, str]]] = None, 
                  lifecycle: Optional[List[Dict[str, str]]] = None,
-                 parent: Optional['State'] = None, children: Optional[List['State']] = None):
+                 parent: Optional['State'] = None, children: Optional[List['State']] = None,
+                 source_ref=None):
         self.name = name
         self.transitions = transitions if transitions is not None else []
         self.lifecycle = lifecycle if lifecycle is not None else []
         self.parent = parent
         self.children = children if children is not None else []
+        self.source_ref = source_ref
 
     def __repr__(self):
         parent_name = self.parent.name if self.parent else None

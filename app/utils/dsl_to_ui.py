@@ -173,7 +173,30 @@ def parse_forced_transition_line(line: str) -> Tuple[str, str, str, str, str]:
     
     return source_state, target_state, event, condition, action
 
-def convert_fcstm_state_to_my_state(fcstm_state: State, parent_state: Optional[MyState] = None) -> MyState:
+def _projected_refs(source_index, owner_path, kinds):
+    if source_index is None:
+        return []
+    kinds = set(kinds)
+    direct = [
+        ref
+        for ref in source_index.refs()
+        if ref.kind in kinds and ref.owner_path == tuple(owner_path)
+    ]
+    projected = [
+        projection.physical_ref
+        for projection in source_index.projections
+        if projection.physical_ref.kind in kinds
+        and projection.projected_owner_path == tuple(owner_path)
+    ]
+    refs = direct or projected
+    return sorted(refs, key=lambda ref: (ref.span.start_offset, ref.span.end_offset))
+
+
+def convert_fcstm_state_to_my_state(
+    fcstm_state: State,
+    parent_state: Optional[MyState] = None,
+    source_index=None,
+) -> MyState:
     """
     将pyfcstm的State对象转换为自定义的MyState对象，转移和生命周期信息转为结构化数据
     """
@@ -181,8 +204,13 @@ def convert_fcstm_state_to_my_state(fcstm_state: State, parent_state: Optional[M
     lifecycle_list = []
 
     # 转移格式化 - 解析转移信息为结构化数据
+    transition_refs = _projected_refs(
+        source_index,
+        tuple(fcstm_state.path),
+        ("transition", "combo_transition", "forced_transition"),
+    )
     if fcstm_state.transitions is not None:
-        for cur_transition in fcstm_state.transitions:
+        for transition_index, cur_transition in enumerate(fcstm_state.transitions):
             # 提取源状态信息
             source_state = ""
             if hasattr(cur_transition, 'from_state'):
@@ -252,13 +280,32 @@ def convert_fcstm_state_to_my_state(fcstm_state: State, parent_state: Optional[M
                         action_parts.append(str(effect))
                 action = "; ".join(action_parts)
 
-            transitions_list.append({
+            source_ref = None
+            if source_index is not None and (
+                getattr(cur_transition, "is_forced", False)
+                or getattr(cur_transition, "combo_origin_refs", ())
+            ):
+                try:
+                    source_ref = source_index.projection_for_model_transition(
+                        cur_transition
+                    ).physical_ref
+                except Exception:
+                    source_ref = None
+            elif transition_index < len(transition_refs):
+                source_ref = transition_refs[transition_index]
+            transition_data = {
                 "source": source_state,
                 "target": target_state,
                 "event": event,
                 "condition": condition,
-                "action": action
-            })
+                "action": action,
+            }
+            if source_index is not None:
+                transition_data["source_ref"] = source_ref
+                transition_data["editable"] = bool(
+                    source_ref and source_ref.editable
+                )
+            transitions_list.append(transition_data)
 
     # 生命周期格式化 - 解析生命周期信息为结构化数据
     def parse_lifecycle_item(stage: str, item):
@@ -297,29 +344,47 @@ def convert_fcstm_state_to_my_state(fcstm_state: State, parent_state: Optional[M
             "comment": comment
         }
 
-    for item in fcstm_state.on_enters:
-        lifecycle_list.append(parse_lifecycle_item("enter", item))
+    lifecycle_refs = iter(
+        _projected_refs(
+            source_index,
+            tuple(fcstm_state.path),
+            ("lifecycle",),
+        )
+    )
+    for stage, items in (
+        ("enter", fcstm_state.on_enters),
+        ("during", fcstm_state.on_durings),
+        ("exit", fcstm_state.on_exits),
+        ("during", fcstm_state.on_during_aspects),
+    ):
+        for item in items:
+            data = parse_lifecycle_item(stage, item)
+            source_ref = next(lifecycle_refs, None)
+            if source_index is not None:
+                data["source_ref"] = source_ref
+                data["editable"] = bool(source_ref and source_ref.editable)
+            lifecycle_list.append(data)
 
-    for item in fcstm_state.on_durings:
-        lifecycle_list.append(parse_lifecycle_item("during", item))
-
-    for item in fcstm_state.on_exits:
-        lifecycle_list.append(parse_lifecycle_item("exit", item))
-
-    for item in fcstm_state.on_during_aspects:
-        lifecycle_list.append(parse_lifecycle_item("during", item))
+    state_refs = _projected_refs(
+        source_index, tuple(fcstm_state.path), ("state",)
+    )
 
     my_state = MyState(
         name=fcstm_state.name,
         transitions=transitions_list,
         lifecycle=lifecycle_list,
         parent=parent_state,
-        children=[]
+        children=[],
+        source_ref=state_refs[0] if state_refs else None,
     )
     return my_state
 
 
-def convert_state_machine_to_state_manager(state_machine: StateMachine, variable_definitions: str = "") -> StateManager:
+def convert_state_machine_to_state_manager(
+    state_machine: StateMachine,
+    variable_definitions: str = "",
+    source_index=None,
+) -> StateManager:
     """
     将fcstm的StateMachine对象转换为StateManager对象
     
@@ -336,7 +401,9 @@ def convert_state_machine_to_state_manager(state_machine: StateMachine, variable
     
     # 首先创建所有状态对象，但不设置父子关系
     for fcstm_state in state_machine.walk_states():
-        my_state = convert_fcstm_state_to_my_state(fcstm_state, None)
+        my_state = convert_fcstm_state_to_my_state(
+            fcstm_state, None, source_index=source_index
+        )
         fcstm_to_my_state[id(fcstm_state)] = my_state
         if fcstm_state == state_machine.root_state:
             root_state = my_state

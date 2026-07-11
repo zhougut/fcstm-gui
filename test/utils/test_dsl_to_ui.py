@@ -9,9 +9,41 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../.
 from app.utils.dsl_to_ui import dsl_to_state_manager, parse_fcstm_file, convert_state_machine_to_state_manager
 from app.utils.ui_to_dsl import state_manager_to_dsl
 from app.model import State, StateManager
+from app.source import build_source_index
+from pyfcstm.model import load_state_machine_from_file
 
 
 class TestDslToUi(unittest.TestCase):
+    def test_source_index_refs_are_attached_to_projection(self):
+        with tempfile.TemporaryDirectory() as directory:
+            child_path = os.path.join(directory, "child.fcstm")
+            root_path = os.path.join(directory, "root.fcstm")
+            with open(child_path, "w", encoding="utf-8") as file:
+                file.write(
+                    "state Child { state Leaf; [*] -> Leaf; Leaf -> [*]; }"
+                )
+            with open(root_path, "w", encoding="utf-8") as file:
+                file.write(
+                    'state Root { import "./child.fcstm" as Imported; '
+                    "state A; [*] -> A; A -> Imported; Imported -> [*]; }"
+                )
+            index = build_source_index(root_path)
+            manager = convert_state_machine_to_state_manager(
+                load_state_machine_from_file(root_path),
+                source_index=index,
+            )
+
+            root = manager.get_state_by_path("Root")
+            local = manager.get_state_by_path("Root.A")
+            imported = manager.get_state_by_path("Root.Imported")
+            self.assertTrue(root.source_ref.editable)
+            self.assertTrue(local.source_ref.editable)
+            self.assertFalse(imported.source_ref.editable)
+            self.assertTrue(all(item["editable"] for item in root.transitions))
+            self.assertTrue(
+                all(not item["editable"] for item in imported.transitions)
+            )
+
     def test_parse_fcstm_file(self):
         """测试解析fcstm文件功能"""
         dsl_content = """

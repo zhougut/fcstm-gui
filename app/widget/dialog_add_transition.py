@@ -6,8 +6,9 @@ from ..ui import UIDialogAddTransition
 from ..model import StateManager, State
 
 class DialogAddTransition(QDialog, UIDialogAddTransition):
-    def __init__(self, parent, state_manager: StateManager, current_state: State, 
-                 is_edit: bool = False, transition_data: dict = None, transition_index: int = -1):
+    def __init__(self, parent, state_manager: StateManager, current_state: State,
+                 is_edit: bool = False, transition_data: dict = None,
+                 transition_index: int = -1, mutate_model: bool = True):
         QDialog.__init__(self, parent)
         self.setupUi(self)
         self.setFixedSize(self.width(), self.height())
@@ -17,6 +18,7 @@ class DialogAddTransition(QDialog, UIDialogAddTransition):
         self.is_edit = is_edit
         self.transition_data = transition_data or {}
         self.transition_index = transition_index
+        self.mutate_model = mutate_model
 
         self._init()
 
@@ -132,6 +134,9 @@ class DialogAddTransition(QDialog, UIDialogAddTransition):
                 "action": action
             }
 
+            if not self.mutate_model:
+                self.accept()
+                return
             if self.is_edit:
                 # 编辑模式：更新现有的转移项
                 if hasattr(self, 'transition_index') and 0 <= self.transition_index < len(self.current_state.transitions):

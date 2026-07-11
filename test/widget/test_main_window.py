@@ -53,7 +53,6 @@ state TrafficLight {
 
         with qtbot.waitSignal(window.document_load_finished, timeout=3000):
             window._import_statechart()
-
         manager = window.state_manager
         assert manager.get_root_state().name == "TrafficLight"
         assert [child.name for child in manager.get_root_state().children] == [
@@ -69,10 +68,10 @@ state TrafficLight {
         assert window.state_machine_file_path == str(tmp_path)
         assert window.document_session.source_text == source.read_bytes().decode("utf-8")
         assert window.document_session.validated_revision == 0
-        assert window.edit_var_def.isReadOnly()
-        assert not window.button_add_state.isEnabled()
-        assert not window.button_transition.isEnabled()
-        assert not window.button_lifecycle.isEnabled()
+        assert not window.edit_var_def.isReadOnly()
+        assert window.button_add_state.isEnabled()
+        assert window.button_transition.isEnabled()
+        assert window.button_lifecycle.isEnabled()
 
     def test_invalid_import_becomes_editable_source_without_stale_model(
         self, monkeypatch, qtbot, window, tmp_path
@@ -210,6 +209,7 @@ state TrafficLight {
         source = tmp_path / "authority.fcstm"
         original = "// exact\nstate Root { state A; [*] -> A; A -> [*]; }\n"
         source.write_text(original, encoding="utf-8")
+        original_bytes = source.read_bytes()
         selected = [(str(source), "fcstm Files (*.fcstm)")]
         monkeypatch.setattr(
             QtWidgets.QFileDialog,
@@ -246,7 +246,157 @@ state TrafficLight {
             ),
         )
         window._export_statechart()
-        assert exported.read_bytes().decode("utf-8") == original
+        assert exported.read_bytes() == original_bytes
+
+    def test_loaded_form_insertions_commit_local_text_edits(
+        self, monkeypatch, qtbot, window, tmp_path
+    ):
+        source = tmp_path / "forms.fcstm"
+        source.write_text(
+            "def int x = 0;\nstate Root { state A; [*] -> A; A -> [*]; }",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            QtWidgets.QFileDialog,
+            "getOpenFileName",
+            lambda *args, **kwargs: (str(source), "fcstm Files (*.fcstm)"),
+        )
+        with qtbot.waitSignal(window.document_load_finished, timeout=3000):
+            window._import_statechart()
+
+        class StateDialog:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def exec_(self):
+                return QtWidgets.QDialog.Accepted
+
+            def get_state_name(self):
+                return "B"
+
+        monkeypatch.setattr(main_window, "DialogEditState", StateDialog)
+        root_item = window.tree_all_state.topLevelItem(0)
+        window.tree_all_state.setCurrentItem(root_item)
+        window._add_state(window.state_manager.root_state, False)
+        assert "state B;" in window.document_session.source_text
+        assert window.document_session.source_revision == 1
+
+        class TransitionDialog:
+            def __init__(self, *args, **kwargs):
+                assert kwargs["mutate_model"] is False
+
+            def exec_(self):
+                return QtWidgets.QDialog.Accepted
+
+            def get_transition_data(self):
+                return {
+                    "source": "A",
+                    "target": "B",
+                    "event": "",
+                    "condition": "",
+                    "action": "",
+                }
+
+        monkeypatch.setattr(main_window, "DialogAddTransition", TransitionDialog)
+        root_item = window.tree_all_state.topLevelItem(0)
+        window.tree_all_state.setCurrentItem(root_item)
+        window._on_button_transition_clicked()
+        assert "A -> B;" in window.document_session.source_text
+        assert window.document_session.source_revision == 2
+        state_b = window.state_manager.get_state_by_path("Root.B")
+        assert window._rename_projected_state(state_b, "C")
+        assert "state C;" in window.document_session.source_text
+        assert "A -> C;" in window.document_session.source_text
+        assert window.document_session.source_revision == 3
+
+        class LifecycleDialog:
+            def __init__(self, *args, **kwargs):
+                assert kwargs["mutate_model"] is False
+
+            def exec_(self):
+                return QtWidgets.QDialog.Accepted
+
+            def get_lifecycle_data(self):
+                return {
+                    "type": "enter",
+                    "name": "",
+                    "action": "",
+                    "is_abstract": False,
+                    "comment": "",
+                }
+
+        monkeypatch.setattr(main_window, "DialogAddLifecycle", LifecycleDialog)
+        root_item = window.tree_all_state.topLevelItem(0)
+        window.tree_all_state.setCurrentItem(root_item)
+        window._on_button_lifecycle_clicked()
+        assert "enter {}" in window.document_session.source_text
+        assert window.document_session.source_revision == 4
+        assert window.document_session.current_valid_snapshot is not None
+        window.edit_var_def.setPlainText("def int x = 1;")
+        assert window._commit_variable_editor()
+        assert window.document_session.source_revision == 5
+        assert "def int x = 1;" in window.document_session.source_text
+        state_c = window.state_manager.get_state_by_path("Root.C")
+        assert window._delete_projected_state(state_c)
+        assert "state C;" not in window.document_session.source_text
+        assert "A -> C;" not in window.document_session.source_text
+        assert window.document_session.source_revision == 6
+
+    def test_loaded_projection_modify_delete_and_import_read_only(
+        self, monkeypatch, qtbot, window, tmp_path
+    ):
+        child = tmp_path / "child.fcstm"
+        source = tmp_path / "modify.fcstm"
+        child.write_text(
+            "state Child { state C; [*] -> C; C -> [*]; }",
+            encoding="utf-8",
+        )
+        source.write_text(
+            'state Root { import "./child.fcstm" as Imported; '
+            "enter {} state A; state B; [*] -> A; A -> B; "
+            "B -> Imported; Imported -> [*]; }",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            QtWidgets.QFileDialog,
+            "getOpenFileName",
+            lambda *args, **kwargs: (str(source), "fcstm Files (*.fcstm)"),
+        )
+        with qtbot.waitSignal(window.document_load_finished, timeout=3000):
+            window._import_statechart()
+        warnings = []
+        monkeypatch.setattr(
+            QtWidgets.QMessageBox,
+            "warning",
+            lambda *args, **kwargs: warnings.append(args),
+        )
+
+        root = window.state_manager.root_state
+        transition = next(
+            item
+            for item in root.transitions
+            if item["source"] == "A" and item["target"] == "B"
+        )
+        assert window._replace_projected_declaration(
+            transition, "A -> [*];"
+        )
+        assert "A -> [*];" in window.document_session.source_text
+
+        root = window.state_manager.root_state
+        lifecycle = root.lifecycle[0]
+        assert window._replace_projected_declaration(lifecycle, "exit {}"), warnings
+        root = window.state_manager.root_state
+        assert window._delete_projected_declaration(root.lifecycle[0])
+        assert "exit {}" not in window.document_session.source_text
+
+        imported = window.state_manager.get_state_by_path("Root.Imported")
+        imported_transition = imported.transitions[0]
+        before = window.document_session
+        assert not window._replace_projected_declaration(
+            imported_transition, "[*] -> C;"
+        )
+        assert window.document_session is before
+        assert warnings
 
     def test_add_button_creates_root_then_child_without_blocking_dialog(
         self, monkeypatch, qtbot, window

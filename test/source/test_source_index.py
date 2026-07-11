@@ -941,7 +941,10 @@ def test_in_memory_root_overlay_keeps_physical_uri_and_real_import_closure(tmp_p
     assert root.read_text(encoding="utf-8") == disk_source
     assert index.root_document.revision == 9
     assert index.dependency_manifest == (
-        (child.resolve().as_uri(), hashlib.sha256(child.read_bytes()).hexdigest()),
+        (
+            SourceDocument.from_file(child).uri,
+            hashlib.sha256(child.read_bytes()).hexdigest(),
+        ),
     )
 
 

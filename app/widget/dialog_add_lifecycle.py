@@ -6,8 +6,9 @@ from ..ui import UIDialogAddLifecycle
 from ..model import StateManager, State
 
 class DialogAddLifecycle(QDialog, UIDialogAddLifecycle):
-    def __init__(self, parent, state_manager: StateManager, current_state: State, 
-                 is_edit: bool = False, lifecycle_data: dict = None, lifecycle_index: int = -1):
+    def __init__(self, parent, state_manager: StateManager, current_state: State,
+                 is_edit: bool = False, lifecycle_data: dict = None,
+                 lifecycle_index: int = -1, mutate_model: bool = True):
         QDialog.__init__(self, parent)
         self.setupUi(self)
         self.setFixedSize(self.width(), self.height())
@@ -17,6 +18,7 @@ class DialogAddLifecycle(QDialog, UIDialogAddLifecycle):
         self.is_edit = is_edit
         self.lifecycle_data = lifecycle_data or {}
         self.lifecycle_index = lifecycle_index
+        self.mutate_model = mutate_model
 
         self._init()
 
@@ -139,6 +141,9 @@ class DialogAddLifecycle(QDialog, UIDialogAddLifecycle):
                 "comment": comment
             }
 
+            if not self.mutate_model:
+                self.accept()
+                return
             if self.is_edit:
                 # 编辑模式：更新现有的生命周期项
                 # 这里需要外部传入要编辑的生命周期项的索引

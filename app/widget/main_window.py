@@ -14,7 +14,9 @@ from ..model import State, StateManager
 from app.application.document import (
     DocumentDependencyStaleError,
     DocumentService,
+    DocumentValidationError,
     InvalidDocumentSaveError,
+    TextEdit,
 )
 from app.application.task_runner import TaskRunner, TaskStatus
 from app.model.session import ValidationState
@@ -25,7 +27,11 @@ from app.utils.dsl_to_ui import (
 )
 from app.utils.export_to_word import export_statechart_to_word
 from app.utils.export_to_excel import export_statechart_to_excel
-from app.utils.ui_to_dsl import format_state
+from app.utils.ui_to_dsl import (
+    format_lifecycle_item,
+    format_state,
+    format_transition_item,
+)
 from .dialog_edit_state import DialogEditState
 from .dialog_show_graph import DialogShowGraph
 from app.utils.ui_to_dsl import state_manager_to_dsl
@@ -51,6 +57,11 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self.document_session = None
         self.task_runner = TaskRunner(parent=self)
         self._setting_source_text = False
+        self._setting_projection = False
+        self._variable_edit_timer = QtCore.QTimer(self)
+        self._variable_edit_timer.setSingleShot(True)
+        self._variable_edit_timer.setInterval(300)
+        self._variable_edit_timer.timeout.connect(self._commit_variable_editor)
         
         # 初始化工具提示相关的实例变量
         self._current_tooltip_item = None
@@ -375,6 +386,10 @@ class AppMainWindow(QMainWindow, UIMainWindow):
 
         if reply == QtWidgets.QMessageBox.Yes:
 
+            if self.document_session is not None:
+                self._delete_projected_state(state)
+                return
+
             self.state_manager.remove_state(state)
             parent_item = item.parent()
             if parent_item:
@@ -478,10 +493,21 @@ class AppMainWindow(QMainWindow, UIMainWindow):
                 return
 
             # 显示生命周期添加对话框
-            dialog = DialogAddLifecycle(self, self.state_manager, current_state)
+            dialog = DialogAddLifecycle(
+                self,
+                self.state_manager,
+                current_state,
+                mutate_model=self.document_session is None,
+            )
             if dialog.exec_() == QtWidgets.QDialog.Accepted:
-                # 对话框已经在内部处理了数据添加，这里只需要刷新表格
-                self._update_lifecycle_table(current_state.lifecycle)
+                if self.document_session is not None:
+                    self._insert_state_declaration(
+                        current_state,
+                        "lifecycle",
+                        format_lifecycle_item(dialog.get_lifecycle_data()),
+                    )
+                else:
+                    self._update_lifecycle_table(current_state.lifecycle)
                 
         except Exception as e:
             QtWidgets.QMessageBox.critical(
@@ -516,10 +542,24 @@ class AppMainWindow(QMainWindow, UIMainWindow):
                 return
 
             # 显示转移添加对话框
-            dialog = DialogAddTransition(self, self.state_manager, current_state)
+            dialog = DialogAddTransition(
+                self,
+                self.state_manager,
+                current_state,
+                mutate_model=self.document_session is None,
+            )
             if dialog.exec_() == QtWidgets.QDialog.Accepted:
-                # 对话框已经在内部处理了数据添加，这里只需要刷新表格
-                self._update_transition_table(current_state.transitions)
+                if self.document_session is not None:
+                    declaration = format_transition_item(
+                        dialog.get_transition_data()
+                    )
+                    if declaration and not declaration.rstrip().endswith("}"):
+                        declaration += ";"
+                    self._insert_state_declaration(
+                        current_state, "transition", declaration
+                    )
+                else:
+                    self._update_transition_table(current_state.transitions)
                 
         except Exception as e:
             QtWidgets.QMessageBox.critical(
@@ -547,6 +587,26 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         保存状态信息，并使用QTreeWidget展示状态
         """
         try:
+            if self.document_session is not None and not is_edit:
+                dialog = DialogEditState(
+                    self,
+                    state_manager=self.state_manager,
+                    is_edit=False,
+                    initial_data=None,
+                    parent_state=father_state,
+                )
+                if dialog.exec_() == QtWidgets.QDialog.Accepted:
+                    if father_state is None:
+                        QtWidgets.QMessageBox.warning(
+                            self, "不可编辑", "已有文档不能新增第二个根状态。"
+                        )
+                        return
+                    self._insert_state_declaration(
+                        father_state,
+                        "state",
+                        "state {};".format(dialog.get_state_name()),
+                    )
+                return
             if is_edit:
                 # 获取当前编辑状态
                 pro_state = self._get_pro_state()
@@ -557,6 +617,11 @@ class AppMainWindow(QMainWindow, UIMainWindow):
                 dialog = DialogEditState(self, state_manager=self.state_manager, is_edit=True, initial_data=pro_state)
                 if dialog.exec_() == QtWidgets.QDialog.Accepted:
                     new_state_name = dialog.get_state_name()
+                    if self.document_session is not None:
+                        self._rename_projected_state(
+                            pro_state, new_state_name
+                        )
+                        return
                     # 改变原状态的名字
                     try:
                         self.state_manager.rename_state(pro_state, new_state_name)
@@ -708,6 +773,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
             manager = convert_state_machine_to_state_manager(
                 snapshot.model,
                 extract_variable_definitions(session.source_text),
+                source_index=snapshot.source_index,
             )
             self._set_active_document_session(session, manager=manager)
         finally:
@@ -726,12 +792,17 @@ class AppMainWindow(QMainWindow, UIMainWindow):
             manager = convert_state_machine_to_state_manager(
                 snapshot.model,
                 extract_variable_definitions(session.source_text),
+                source_index=snapshot.source_index,
             )
         if manager is None:
             self._clear_model_projection()
         else:
             self.state_manager = manager
-            update_ui_from_state_manager(self, manager)
+            self._setting_projection = True
+            try:
+                update_ui_from_state_manager(self, manager)
+            finally:
+                self._setting_projection = False
         self._update_document_actions()
 
     def _clear_model_projection(self):
@@ -749,10 +820,10 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self.action_save_state_machine.setEnabled(session is not None)
         self.action_graph_gen.setEnabled(current_valid)
         self.action_code_gen.setEnabled(current_valid)
-        self.edit_var_def.setReadOnly(session is not None)
-        self.button_add_state.setEnabled(session is None)
-        self.button_lifecycle.setEnabled(session is None)
-        self.button_transition.setEnabled(session is None)
+        self.edit_var_def.setReadOnly(session is not None and not current_valid)
+        self.button_add_state.setEnabled(session is None or current_valid)
+        self.button_lifecycle.setEnabled(session is None or current_valid)
+        self.button_transition.setEnabled(session is None or current_valid)
         self.setWindowModified(bool(session and session.dirty))
         if session is not None:
             self.setWindowFilePath(session.path)
@@ -889,13 +960,16 @@ class AppMainWindow(QMainWindow, UIMainWindow):
                     if not file_name.endswith('.fcstm'):
                         file_name += '.fcstm'
 
-                    dsl_str = (
-                        self.document_session.source_text
-                        if self.document_session is not None
-                        else state_manager_to_dsl(self.state_manager)
-                    )
-                    with open(file_name, 'w', encoding='utf-8') as f:
-                        f.write(dsl_str)
+                    if self.document_session is not None:
+                        payload = self.document_session.source_text.encode(
+                            self.document_session.encoding
+                        )
+                    else:
+                        payload = state_manager_to_dsl(
+                            self.state_manager
+                        ).encode("utf-8")
+                    with open(file_name, "wb") as file:
+                        file.write(payload)
 
                 elif selected_filter == "Word Documents (*.docx)":
                     if self.document_session is not None:
@@ -1219,6 +1293,11 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         当变量定义文本框内容变化时，保存到StateManager
         """
         try:
+            if self._setting_projection:
+                return
+            if self.document_session is not None:
+                self._variable_edit_timer.start()
+                return
             if self.state_manager is None:
                 return
                 
@@ -1233,6 +1312,56 @@ class AppMainWindow(QMainWindow, UIMainWindow):
                 f"保存变量定义时发生错误：\n{str(e)}",
                 QtWidgets.QMessageBox.Ok
             )
+
+    def _commit_variable_editor(self):
+        self._variable_edit_timer.stop()
+        session = self.document_session
+        if session is None or session.current_valid_snapshot is None:
+            return False
+        desired = self.edit_var_def.toPlainText().strip()
+        index = session.current_valid_snapshot.source_index
+        refs = tuple(
+            ref
+            for ref in index.refs(
+                kind="variable", document_id=index.root_document_id
+            )
+            if ref.editable
+        )
+        edits = []
+        if refs:
+            edits.append(
+                TextEdit.for_ref(
+                    session.source_revision,
+                    refs[0],
+                    desired,
+                    intent="edit variables",
+                )
+            )
+            edits.extend(
+                TextEdit.for_ref(
+                    session.source_revision,
+                    ref,
+                    ref.deletion_replacement,
+                    intent="remove variable",
+                )
+                for ref in refs[1:]
+            )
+        elif desired:
+            anchor = index.insertion_anchor("variable")
+            edits.append(
+                TextEdit.for_anchor(
+                    session.source_revision,
+                    anchor,
+                    desired + "\n",
+                    intent="add variables",
+                )
+            )
+        else:
+            return True
+        if self._commit_form_edits(tuple(edits)):
+            return True
+        self._set_active_document_session(session)
+        return False
 
     def _get_pro_state(self) -> Optional[State]:
         # 获得当前Tree中选择的item
@@ -1300,12 +1429,18 @@ class AppMainWindow(QMainWindow, UIMainWindow):
                 current_state=current_state,
                 is_edit=True,
                 lifecycle_data=lifecycle_data,
-                lifecycle_index=row
+                lifecycle_index=row,
+                mutate_model=self.document_session is None,
             )
             
             if dialog.exec_() == QtWidgets.QDialog.Accepted:
-                # 刷新生命周期表格显示
-                self._update_lifecycle_table(current_state.lifecycle)
+                if self.document_session is not None:
+                    self._replace_projected_declaration(
+                        lifecycle_data,
+                        format_lifecycle_item(dialog.get_lifecycle_data()),
+                    )
+                else:
+                    self._update_lifecycle_table(current_state.lifecycle)
                 
         except Exception as e:
             QtWidgets.QMessageBox.critical(
@@ -1341,7 +1476,9 @@ class AppMainWindow(QMainWindow, UIMainWindow):
             )
             
             if reply == QtWidgets.QMessageBox.Yes:
-                # 删除生命周期操作
+                if self.document_session is not None:
+                    self._delete_projected_declaration(lifecycle_data)
+                    return
                 del current_state.lifecycle[row]
                 
                 # 刷新生命周期表格显示
@@ -1414,12 +1551,22 @@ class AppMainWindow(QMainWindow, UIMainWindow):
                 current_state=current_state,
                 is_edit=True,
                 transition_data=transition_data,
-                transition_index=row
+                transition_index=row,
+                mutate_model=self.document_session is None,
             )
             
             if dialog.exec_() == QtWidgets.QDialog.Accepted:
-                # 刷新转移表格显示
-                self._update_transition_table(current_state.transitions)
+                if self.document_session is not None:
+                    declaration = format_transition_item(
+                        dialog.get_transition_data()
+                    )
+                    if declaration and not declaration.rstrip().endswith("}"):
+                        declaration += ";"
+                    self._replace_projected_declaration(
+                        transition_data, declaration
+                    )
+                else:
+                    self._update_transition_table(current_state.transitions)
                 
         except Exception as e:
             QtWidgets.QMessageBox.critical(
@@ -1456,7 +1603,9 @@ class AppMainWindow(QMainWindow, UIMainWindow):
             )
             
             if reply == QtWidgets.QMessageBox.Yes:
-                # 删除转移
+                if self.document_session is not None:
+                    self._delete_projected_declaration(transition_data)
+                    return
                 del current_state.transitions[row]
                 
                 # 刷新转移表格显示
@@ -1471,3 +1620,193 @@ class AppMainWindow(QMainWindow, UIMainWindow):
                 f"删除转移时发生错误：\n{str(e)}",
                 QtWidgets.QMessageBox.Ok
             )
+
+    def _insert_state_declaration(self, state, kind, declaration):
+        snapshot = self._require_current_snapshot_for_action("编辑")
+        if snapshot is None:
+            return False
+        owner_path = tuple(state.get_full_path().split("."))
+        try:
+            anchor = snapshot.source_index.insertion_anchor(
+                kind, owner_path=owner_path
+            )
+        except Exception as error:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "只读来源",
+                "该对象不能在当前文件中编辑：\n{}".format(error),
+            )
+            return False
+        indent = "    " * len(owner_path)
+        closing_indent = "    " * max(0, len(owner_path) - 1)
+        block = "\n".join(
+            indent + line if line else line
+            for line in declaration.splitlines()
+        )
+        before = self.document_session.source_text[:anchor.offset]
+        prefix = "" if before.endswith("\n" + closing_indent) else "\n"
+        replacement = prefix + block + "\n" + closing_indent
+        edit = TextEdit.for_anchor(
+            self.document_session.source_revision,
+            anchor,
+            replacement,
+            intent="insert {}".format(kind),
+        )
+        return self._commit_form_edits((edit,))
+
+    def _rename_projected_state(self, state, new_name):
+        source_ref = getattr(state, "source_ref", None)
+        if source_ref is None or not source_ref.editable:
+            QtWidgets.QMessageBox.warning(
+                self, "只读来源", "该状态来自 import 或生成投影，不能重命名。"
+            )
+            return False
+        snapshot = self.document_session.current_valid_snapshot
+        declaration = snapshot.source_index.text_for_ref(source_ref)
+        if "{" in declaration:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "暂不支持",
+                "复合状态请在源码编辑器中重命名，以避免重叠引用。",
+            )
+            return False
+        old_name = state.name
+        state_text = re.sub(
+            r"(\bstate\s+){}\b".format(re.escape(old_name)),
+            r"\g<1>{}".format(new_name),
+            declaration,
+            count=1,
+        )
+        edits = [
+            TextEdit.for_ref(
+                self.document_session.source_revision,
+                source_ref,
+                state_text,
+                intent="rename state",
+            )
+        ]
+        token = re.compile(
+            r"(?<![A-Za-z0-9_]){}(?![A-Za-z0-9_])".format(
+                re.escape(old_name)
+            )
+        )
+        for ref in snapshot.source_index.refs(
+            document_id=snapshot.source_index.root_document_id
+        ):
+            if (
+                ref.editable
+                and "transition" in ref.kind
+                and not (
+                    source_ref.span.start_offset
+                    <= ref.span.start_offset
+                    < source_ref.span.end_offset
+                )
+            ):
+                text = snapshot.source_index.text_for_ref(ref)
+                replacement = token.sub(new_name, text)
+                if replacement != text:
+                    edits.append(
+                        TextEdit.for_ref(
+                            self.document_session.source_revision,
+                            ref,
+                            replacement,
+                            intent="rename state reference",
+                        )
+                    )
+        return self._commit_form_edits(tuple(edits))
+
+    def _delete_projected_state(self, state):
+        source_ref = getattr(state, "source_ref", None)
+        if source_ref is None or not source_ref.editable:
+            QtWidgets.QMessageBox.warning(
+                self, "只读来源", "该状态来自 import 或生成投影，不能删除。"
+            )
+            return False
+        snapshot = self.document_session.current_valid_snapshot
+        token = re.compile(
+            r"(?<![A-Za-z0-9_]){}(?![A-Za-z0-9_])".format(
+                re.escape(state.name)
+            )
+        )
+        edits = [
+            TextEdit.for_ref(
+                self.document_session.source_revision,
+                source_ref,
+                source_ref.deletion_replacement,
+                intent="delete state",
+            )
+        ]
+        for ref in snapshot.source_index.refs(
+            document_id=snapshot.source_index.root_document_id
+        ):
+            if (
+                ref.editable
+                and "transition" in ref.kind
+                and not (
+                    source_ref.span.start_offset
+                    <= ref.span.start_offset
+                    < source_ref.span.end_offset
+                )
+            ):
+                text = snapshot.source_index.text_for_ref(ref)
+                if token.search(text):
+                    edits.append(
+                        TextEdit.for_ref(
+                            self.document_session.source_revision,
+                            ref,
+                            ref.deletion_replacement,
+                            intent="delete state transition",
+                        )
+                    )
+        return self._commit_form_edits(tuple(edits))
+
+    def _replace_projected_declaration(self, data, declaration):
+        source_ref = data.get("source_ref")
+        if source_ref is None or not source_ref.editable:
+            QtWidgets.QMessageBox.warning(
+                self, "只读来源", "该声明来自 import 或生成投影，不能直接编辑。"
+            )
+            return False
+        edit = TextEdit.for_ref(
+            self.document_session.source_revision,
+            source_ref,
+            declaration,
+            intent="replace {}".format(source_ref.kind),
+        )
+        return self._commit_form_edits((edit,))
+
+    def _delete_projected_declaration(self, data):
+        source_ref = data.get("source_ref")
+        if source_ref is None or not source_ref.editable:
+            QtWidgets.QMessageBox.warning(
+                self, "只读来源", "该声明来自 import 或生成投影，不能直接删除。"
+            )
+            return False
+        edit = TextEdit.for_ref(
+            self.document_session.source_revision,
+            source_ref,
+            source_ref.deletion_replacement,
+            intent="delete {}".format(source_ref.kind),
+        )
+        return self._commit_form_edits((edit,))
+
+    def _commit_form_edits(self, edits):
+        try:
+            updated = self.document_service.apply_edits(
+                self.document_session, edits
+            )
+        except DocumentValidationError as error:
+            detail = "\n".join(
+                str(item) for item in error.candidate.current_diagnostics
+            )
+            QtWidgets.QMessageBox.warning(
+                self,
+                "编辑未应用",
+                "候选源码未通过完整校验：\n{}".format(detail),
+            )
+            return False
+        except Exception as error:
+            QtWidgets.QMessageBox.warning(self, "编辑未应用", str(error))
+            return False
+        self._set_active_document_session(updated)
+        return True
