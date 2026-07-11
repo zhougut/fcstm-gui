@@ -31,13 +31,13 @@ state Root {
 }
 """
     path = tmp_path / "root.fcstm"
-    path.write_text(source, encoding="utf-8")
+    path.write_bytes(source.encode("utf-8"))
 
     index = build_source_index(path)
 
     assert _slices(index, "variable") == ["def int x = 0;"]
     assert index.refs(kind="variable")[0].semantic_key == "variable:x"
-    assert "state Root {\n" in _slices(index, "state")[0]
+    assert _slices(index, "state")[0].startswith("state Root {")
     assert "state A;" in _slices(index, "state")
     assert _slices(index, "event") == ["event Go;"]
     assert _slices(index, "lifecycle") == ["enter { x = x + 1; }"]
@@ -172,6 +172,31 @@ def test_crlf_tabs_and_same_line_declarations_have_distinct_ranges(tmp_path):
         "state B;",
     ]
     assert state_refs[1].span.end_offset <= state_refs[2].span.start_offset
+
+
+def test_crlf_edits_use_indexed_source_text_and_preserve_untouched_bytes(tmp_path):
+    path = tmp_path / "crlf-edit.fcstm"
+    raw = b"state Root {\r\n    state A;\r\n    state B;\r\n}\r\n"
+    path.write_bytes(raw)
+    index = build_source_index(path, revision=9)
+    ref = next(
+        item
+        for item in index.refs(kind="state")
+        if index.text_for_ref(item) == "state A;"
+    )
+    source_text = index.root_document.text
+    replacement = "state Renamed;"
+
+    edited = (
+        source_text[:ref.span.start_offset]
+        + replacement
+        + source_text[ref.span.end_offset:]
+    )
+    path.write_bytes(edited.encode(index.root_document.encoding))
+    rebuilt = build_source_index(path, revision=10)
+
+    assert "\r\n" in rebuilt.root_document.text
+    assert rebuilt.root_document.text.replace(replacement, "state A;", 1) == source_text
 
 
 def test_symlinked_imports_use_one_canonical_document(tmp_path):
@@ -578,7 +603,7 @@ state Root {
     ! A -> B : if [x < 0];
 }
 """
-    path.write_text(source, encoding="utf-8")
+    path.write_bytes(source.encode("utf-8"))
     index = build_source_index(path)
     combo = index.refs(kind="combo_transition")[0]
     forced = index.refs(kind="forced_transition")[0]
@@ -648,9 +673,14 @@ def test_imported_combo_model_objects_require_and_use_physical_source_uri(tmp_pa
     with pytest.raises(SourceIndexError, match="not unique"):
         index.projection_for_model_transition(transitions[0])
 
+    child_uri = next(
+        document.uri
+        for document in index.documents.values()
+        if Path(document.path).name == "child.fcstm"
+    )
     projections = tuple(
         index.projection_for_model_transition(
-            transition, source_uri=child.resolve().as_uri()
+            transition, source_uri=child_uri
         )
         for transition in transitions
     )
@@ -688,7 +718,7 @@ def test_import_alias_projections_are_distinct_read_only_source_links(tmp_path):
     assert {item.alias_chain for item in projections} == {("First",), ("Second",)}
     assert len({item.projection_id for item in projections}) == 2
     assert all(not item.editable for item in projections)
-    assert all(item.source_uri == child.resolve().as_uri() for item in projections)
+    assert all(item.source_uri == index.document_for_ref(child_ref).uri for item in projections)
 
 
 def test_transitive_alias_projection_replaces_each_physical_root_name(tmp_path):
@@ -718,7 +748,7 @@ def test_transitive_alias_projection_replaces_each_physical_root_name(tmp_path):
 def test_insertion_anchors_add_all_root_owned_declaration_slots(tmp_path):
     path = tmp_path / "root.fcstm"
     source = "state Root {\n}\n"
-    path.write_text(source, encoding="utf-8")
+    path.write_bytes(source.encode("utf-8"))
 
     additions = (
         ("variable", (), "def int x = 0;\n"),
@@ -729,14 +759,14 @@ def test_insertion_anchors_add_all_root_owned_declaration_slots(tmp_path):
     )
     current = source
     for kind, owner_path, text in additions:
-        path.write_text(current, encoding="utf-8")
+        path.write_bytes(current.encode("utf-8"))
         index = build_source_index(path)
         anchor = index.insertion_anchor(kind, owner_path=owner_path)
         assert anchor.editable
         assert anchor.source_revision == index.root_document.revision
         index.validate_insertion_anchor(anchor)
         current = current[:anchor.offset] + text + current[anchor.offset:]
-        path.write_text(current, encoding="utf-8")
+        path.write_bytes(current.encode("utf-8"))
         rebuilt = build_source_index(path)
         assert rebuilt.refs(kind=kind)
 
@@ -812,7 +842,7 @@ state Root {
     enter { }
 }
 """
-    path.write_text(source, encoding="utf-8")
+    path.write_bytes(source.encode("utf-8"))
 
     index = build_source_index(path)
     transition = index.refs(kind="transition")[0]
@@ -820,7 +850,7 @@ state Root {
         "guard", declaration_ref=transition.declaration_ref
     )
     source = source[:guard_anchor.offset] + " : [x > 0]" + source[guard_anchor.offset:]
-    path.write_text(source, encoding="utf-8")
+    path.write_bytes(source.encode("utf-8"))
     index = build_source_index(path)
     assert _slices(index, "guard") == ["x > 0"]
 
@@ -829,7 +859,7 @@ state Root {
         "effect", declaration_ref=transition.declaration_ref
     )
     source = source[:effect_anchor.offset] + " effect { x = 1; }" + source[effect_anchor.offset:]
-    path.write_text(source, encoding="utf-8")
+    path.write_bytes(source.encode("utf-8"))
     index = build_source_index(path)
     assert _slices(index, "effect") == ["effect { x = 1; }"]
 
@@ -838,7 +868,7 @@ state Root {
         "action", declaration_ref=lifecycle.declaration_ref
     )
     source = source[:action_anchor.offset] + " x = 2;" + source[action_anchor.offset:]
-    path.write_text(source, encoding="utf-8")
+    path.write_bytes(source.encode("utf-8"))
     index = build_source_index(path)
     assert "x = 2;" in _slices(index, "action")
 
@@ -870,13 +900,13 @@ state Root {
     B -> A;
 }
 """
-    path.write_text(source, encoding="utf-8")
+    path.write_bytes(source.encode("utf-8"))
     index = build_source_index(path)
     ref = next(ref for ref in index.refs(kind=kind) if index.text_for_ref(ref) == old_text)
 
     modified = source[:ref.span.start_offset] + new_text + source[ref.span.end_offset:]
     assert modified.replace(new_text, old_text, 1) == source
-    path.write_text(modified, encoding="utf-8")
+    path.write_bytes(modified.encode("utf-8"))
     build_source_index(path)
 
     deleted = (
@@ -884,5 +914,5 @@ state Root {
         + ref.deletion_replacement
         + source[ref.span.end_offset:]
     )
-    path.write_text(deleted, encoding="utf-8")
+    path.write_bytes(deleted.encode("utf-8"))
     build_source_index(path)

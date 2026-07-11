@@ -17,7 +17,7 @@ class SourceEncodingAmbiguityError(UnicodeError):
 
 
 def canonical_path(path: PathLike) -> Path:
-    return Path(os.path.realpath(os.path.abspath(os.fspath(path))))
+    return Path(os.path.abspath(os.fspath(path))).resolve(strict=False)
 
 
 def _decode_source(raw: bytes, encoding: Optional[str] = None) -> Tuple[str, str]:
