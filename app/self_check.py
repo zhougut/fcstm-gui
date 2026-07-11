@@ -83,11 +83,35 @@ def _check_pyfcstm_roundtrip():
 def _check_z3_solver():
     import z3
     value = z3.Int('fcstm_self_check')
-    solver = z3.Solver()
-    solver.add(value == 7)
-    if solver.check() != z3.sat or solver.model()[value].as_long() != 7:
-        raise RuntimeError('Z3 failed the SAT/model check')
-    return z3.get_version_string()
+    sat_solver = z3.Solver()
+    sat_solver.add(value > 5, value < 10)
+    if sat_solver.check() != z3.sat or not 5 < sat_solver.model()[value].as_long() < 10:
+        raise RuntimeError('Z3 integer SAT/model check failed')
+
+    unsat_solver = z3.Solver()
+    unsat_solver.add(value > 2, value < 2)
+    if unsat_solver.check() != z3.unsat:
+        raise RuntimeError('Z3 UNSAT check failed')
+
+    real = z3.Real('fcstm_real')
+    real_solver = z3.Solver()
+    real_solver.add(real * 3 == 1)
+    if real_solver.check() != z3.sat or str(real_solver.model()[real]) != '1/3':
+        raise RuntimeError('Z3 real arithmetic check failed')
+
+    bits = z3.BitVec('fcstm_bits', 8)
+    bit_solver = z3.Solver()
+    bit_solver.add((bits & 0x0f) == 0x0a, bits == 0x2a)
+    if bit_solver.check() != z3.sat or bit_solver.model()[bits].as_long() != 0x2a:
+        raise RuntimeError('Z3 bit-vector check failed')
+
+    optimum = z3.Int('fcstm_optimum')
+    optimizer = z3.Optimize()
+    optimizer.add(optimum >= 0, optimum <= 20)
+    optimizer.maximize(optimum)
+    if optimizer.check() != z3.sat or optimizer.model()[optimum].as_long() != 20:
+        raise RuntimeError('Z3 Optimize/maximize check failed')
+    return '5 solve scenarios OK (z3 {})'.format(z3.get_version_string())
 
 
 def _check_qt_native_widgets():
