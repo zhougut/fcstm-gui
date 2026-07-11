@@ -6,7 +6,14 @@ from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, co
 
 mode = os.environ.get('FCSTM_GUI_BUILD_MODE', 'onedir').lower()
 datas = [('docs/plantuml.jar', 'docs')] + collect_data_files('qtawesome') + collect_data_files('pyfcstm')
-binaries = collect_dynamic_libs('z3', destdir='z3/lib')
+if sys.platform == 'win32':
+    z3_suffixes = ('.dll',)
+elif sys.platform == 'darwin':
+    z3_suffixes = ('.dylib',)
+else:
+    z3_suffixes = ('.so',)
+binaries = [item for item in collect_dynamic_libs('z3', destdir='z3/lib')
+            if item[0].lower().endswith(z3_suffixes)]
 
 if sys.platform == 'win32':
     cairo = shutil.which('libcairo-2.dll')
