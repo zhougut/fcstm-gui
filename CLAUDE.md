@@ -130,7 +130,8 @@ always expose the same contract.
 - Numeric geometry cannot detect missing glyphs. Fresh Linux and Windows
   runners may lack a usable CJK fallback even when every widget fits; keep the
   OFL-licensed bundled font loaded as the application family, assert that
-  family in reports, and inspect fresh-runner screenshots before release.
+  family and a fixed point size in reports, and inspect fresh-runner
+  screenshots before release.
 
 ## Required Local Evidence
 

@@ -1,6 +1,7 @@
 import hashlib
 
 from app.utils.application_font import (
+    APPLICATION_FONT_POINT_SIZE,
     EXPECTED_FAMILY,
     FONT_SHA256,
     bundled_font_path,
@@ -14,3 +15,4 @@ def test_bundled_cjk_font_is_installed_as_application_font(qapp):
     assert hashlib.sha256(data).hexdigest() == FONT_SHA256
     assert install_application_font(qapp) == EXPECTED_FAMILY
     assert qapp.font().family() == EXPECTED_FAMILY
+    assert qapp.font().pointSize() == APPLICATION_FONT_POINT_SIZE

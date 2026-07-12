@@ -157,6 +157,7 @@ def _check_qt_cjk_font():
     from PyQt5 import QtCore, QtGui
     from PyQt5.QtWidgets import QApplication
     from app.utils.application_font import (
+        APPLICATION_FONT_POINT_SIZE,
         EXPECTED_FAMILY,
         FONT_SHA256,
         bundled_font_path,
@@ -167,7 +168,11 @@ def _check_qt_cjk_font():
     if hashlib.sha256(data).hexdigest() != FONT_SHA256:
         raise RuntimeError('bundled CJK font SHA-256 mismatch')
     family = install_application_font(app)
-    if family != EXPECTED_FAMILY or app.font().family() != EXPECTED_FAMILY:
+    if (
+        family != EXPECTED_FAMILY
+        or app.font().family() != EXPECTED_FAMILY
+        or app.font().pointSize() != APPLICATION_FONT_POINT_SIZE
+    ):
         raise RuntimeError('bundled CJK font did not become the application font')
     image = QtGui.QImage(320, 80, QtGui.QImage.Format_ARGB32)
     image.fill(QtCore.Qt.white)

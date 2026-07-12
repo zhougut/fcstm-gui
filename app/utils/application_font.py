@@ -11,6 +11,7 @@ from PyQt5 import QtGui, QtWidgets
 FONT_FILENAME = "NotoSansCJKsc-Regular.otf"
 FONT_SHA256 = "2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b"
 EXPECTED_FAMILY = "Noto Sans CJK SC"
+APPLICATION_FONT_POINT_SIZE = 10
 _font_id = None
 
 
@@ -37,5 +38,6 @@ def install_application_font(app=None):
         return None
     font = app.font()
     font.setFamily(EXPECTED_FAMILY)
+    font.setPointSize(APPLICATION_FONT_POINT_SIZE)
     app.setFont(font)
     return EXPECTED_FAMILY
