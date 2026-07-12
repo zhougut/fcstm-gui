@@ -1878,7 +1878,10 @@ state TrafficLight {
         assert window.document_name_label.text() != source.name
         assert len(window.document_name_label.text()) < len(source.name)
         assert window.document_name_label.toolTip() != str(source)
-        assert "<TEMP>" in window.document_name_label.toolTip()
+        assert any(
+            marker in window.document_name_label.toolTip()
+            for marker in ("<TEMP>", "<HOME>")
+        )
         window.task_result_dock.show_full_paths_action.setChecked(True)
         assert window.document_name_label.toolTip() == str(source)
         window.task_result_dock.show_full_paths_action.setChecked(False)

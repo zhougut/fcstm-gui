@@ -416,7 +416,10 @@ def test_full_path_display_requires_explicit_opt_in_and_persists_setting(
     dock.show_full_paths_action.trigger()
 
     assert dock.show_full_paths_action.isChecked()
-    assert str(workspace) in dock.detail.toPlainText()
+    detail_payload = json.loads(dock.detail.toPlainText())
+    assert detail_payload["summary"] == "created {}".format(artifact)
+    assert detail_payload["artifacts"][0]["label"] == "result {}".format(artifact)
+    assert detail_payload["artifacts"][0]["path"] == str(artifact)
     assert str(workspace) in dock.artifact_list.item(0).text()
     qtbot.mouseClick(dock.copy_button, QtCore.Qt.LeftButton)
     copied = json.loads(QtWidgets.QApplication.clipboard().text())
@@ -434,7 +437,9 @@ def test_full_path_display_requires_explicit_opt_in_and_persists_setting(
     restored_dock = TaskResultDock(center, settings=settings)
     qtbot.addWidget(restored_dock)
     assert restored_dock.show_full_paths_action.isChecked()
-    assert str(workspace) in restored_dock.detail.toPlainText()
+    restored_payload = json.loads(restored_dock.detail.toPlainText())
+    assert restored_payload["summary"] == "created {}".format(artifact)
+    assert restored_payload["artifacts"][0]["path"] == str(artifact)
 
 
 def test_result_dock_handles_non_finite_history_time(qtbot, tmp_path):
