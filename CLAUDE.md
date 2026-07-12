@@ -150,6 +150,10 @@ always expose the same contract.
   table minimums plus native button metrics can exceed a manually guessed
   group height at Cocoa scale 2; use `QLayout.SetMinimumSize` so the scroll
   area scrolls instead of compressing sibling tables and buttons together.
+- `isVisibleTo(window)` does not account for an ancestor scroll viewport's
+  clipping. Geometry checks must skip a nested table that is currently below
+  that viewport while still validating the outer scroll area and its ranges;
+  being reachable by scrolling is not window clipping.
 - Run cross-platform GUI checks with the target platform plugin (`xcb`,
   `windows`, or `cocoa`) in both package and fresh stages. Windows Qt can
   access-violate when a real modal message box is driven through the offscreen

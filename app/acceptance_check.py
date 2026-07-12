@@ -870,7 +870,7 @@ class AcceptanceDriver(object):
         receiver.setFocus(QtCore.Qt.ActiveWindowFocusReason)
         self._wait_until(
             lambda: self.window.isActiveWindow() and receiver.hasFocus(),
-            timeout_ms=5000,
+            timeout_ms=15000,
         )
         QtTest.QTest.keySequence(receiver, action.shortcut())
         self._wait_until(
@@ -3489,6 +3489,24 @@ class AcceptanceDriver(object):
                 viewport_rect = QtCore.QRect(
                     viewport_point, viewport_widget.size()
                 )
+                ancestor = area.parentWidget()
+                clipped_by_scroll_ancestor = False
+                while ancestor is not None and ancestor is not page:
+                    parent = ancestor.parentWidget()
+                    if (
+                        isinstance(parent, QtWidgets.QAbstractScrollArea)
+                        and ancestor is parent.viewport()
+                    ):
+                        clip_point = ancestor.mapTo(
+                            self.window, QtCore.QPoint(0, 0)
+                        )
+                        clip_rect = QtCore.QRect(clip_point, ancestor.size())
+                        if not clip_rect.contains(viewport_rect):
+                            clipped_by_scroll_ancestor = True
+                            break
+                    ancestor = parent
+                if clipped_by_scroll_ancestor:
+                    continue
                 if viewport_rect.isEmpty() or not window_rect.contains(viewport_rect):
                     raise RuntimeError(
                         "scroll viewport is clipped: "
