@@ -65,6 +65,7 @@ class DocumentSession:
     last_valid_snapshot: Optional[ValidSnapshot] = None
     current_diagnostics: Tuple[Any, ...] = ()
     task_ids: Tuple[str, ...] = ()
+    encoding_hints: Tuple[Tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
         valid = self.validation_state in {
@@ -90,7 +91,13 @@ class DocumentSession:
             )
 
     @classmethod
-    def new(cls, path: str, encoding: str, source_text: str) -> "DocumentSession":
+    def new(
+        cls,
+        path: str,
+        encoding: str,
+        source_text: str,
+        encoding_hints: Tuple[Tuple[str, str], ...] = (),
+    ) -> "DocumentSession":
         return cls(
             session_id=uuid.uuid4().hex,
             path=path,
@@ -99,6 +106,7 @@ class DocumentSession:
             source_revision=0,
             saved_revision=0,
             validation_state=ValidationState.PENDING,
+            encoding_hints=tuple(encoding_hints),
         )
 
     @property

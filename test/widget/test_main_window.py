@@ -1,3 +1,5 @@
+import threading
+
 import pytest
 from PyQt5 import QtCore, QtWidgets
 
@@ -10,8 +12,11 @@ from app.widget import main_window
 @pytest.mark.unittest
 class TestMainWindow:
     @pytest.fixture
-    def window(self, qtbot):
-        window = AppMainWindow()
+    def window(self, qtbot, tmp_path):
+        settings = QtCore.QSettings(
+            str(tmp_path / "settings.ini"), QtCore.QSettings.IniFormat
+        )
+        window = AppMainWindow(settings=settings)
         qtbot.addWidget(window)
         return window
 
@@ -112,6 +117,294 @@ state TrafficLight {
         assert messages
         assert messages[0][0] == "导入失败"
         assert "解析fcstm文件时发生错误" in messages[0][1]
+
+    def test_ambiguous_root_encoding_prompts_and_retries(
+        self, monkeypatch, qtbot, window, tmp_path
+    ):
+        source = tmp_path / "encoded.fcstm"
+        source_text = 'state Root named "全";'
+        source.write_bytes(source_text.encode("gb18030"))
+        monkeypatch.setattr(
+            QtWidgets.QFileDialog,
+            "getOpenFileName",
+            lambda *args, **kwargs: (str(source), "fcstm Files (*.fcstm)"),
+        )
+        prompts = []
+        monkeypatch.setattr(
+            QtWidgets.QInputDialog,
+            "getItem",
+            lambda *args, **kwargs: (
+                prompts.append(args) or "GB18030",
+                True,
+            ),
+        )
+
+        window._import_statechart()
+        qtbot.waitUntil(
+            lambda: window.document_session is not None,
+            timeout=3000,
+        )
+
+        assert prompts
+        assert window.document_session.encoding == "gb18030"
+        assert window.document_session.source_text == source_text
+
+    def test_wrong_root_encoding_can_be_reselected_before_final_signal(
+        self, monkeypatch, qtbot, window, tmp_path
+    ):
+        source = tmp_path / "encoded.fcstm"
+        source_text = 'state Root named "全";'
+        source.write_bytes(source_text.encode("gb18030"))
+        monkeypatch.setattr(
+            QtWidgets.QFileDialog,
+            "getOpenFileName",
+            lambda *args, **kwargs: (str(source), "fcstm Files (*.fcstm)"),
+        )
+        selections = iter((("Big5", True), ("GB18030", True)))
+        monkeypatch.setattr(
+            QtWidgets.QInputDialog,
+            "getItem",
+            lambda *args, **kwargs: next(selections),
+        )
+        completed = []
+        window.document_load_finished.connect(completed.append)
+
+        with qtbot.waitSignal(window.document_load_finished, timeout=3000):
+            operation = window._import_statechart()
+
+        assert len(completed) == 1
+        assert completed[0].operation_id == operation.operation_id
+        assert operation.result is completed[0]
+        assert operation.result.status is main_window.TaskStatus.SUCCESS
+        assert window.document_session.encoding == "gb18030"
+        assert window.document_session.source_text == source_text
+
+    def test_import_encoding_cancel_keeps_current_document(
+        self, monkeypatch, qtbot, window, tmp_path
+    ):
+        current_path = tmp_path / "current.fcstm"
+        current_path.write_text("state Current;", encoding="utf-8")
+        current = window.document_service.load(current_path)
+        window._set_active_document_session(current)
+
+        child = tmp_path / "child.fcstm"
+        root = tmp_path / "root.fcstm"
+        child.write_bytes('state Child named "状态";'.encode("gb18030"))
+        root.write_text(
+            'state Root { import "./child.fcstm" as Imported; '
+            '[*] -> Imported; Imported -> [*]; }',
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            QtWidgets.QFileDialog,
+            "getOpenFileName",
+            lambda *args, **kwargs: (str(root), "fcstm Files (*.fcstm)"),
+        )
+        monkeypatch.setattr(
+            QtWidgets.QInputDialog,
+            "getItem",
+            lambda *args, **kwargs: ("UTF-8", False),
+        )
+
+        with qtbot.waitSignal(window.document_load_finished, timeout=3000):
+            operation = window._import_statechart()
+
+        assert window.document_session is current
+        assert window.document_session.source_text == "state Current;"
+        assert operation.result.status is main_window.TaskStatus.CANCELLED
+
+    def test_root_encoding_cancel_keeps_current_document_without_error_dialog(
+        self, monkeypatch, qtbot, window, tmp_path
+    ):
+        current_path = tmp_path / "current.fcstm"
+        current_path.write_text("state Current;", encoding="utf-8")
+        current = window.document_service.load(current_path)
+        window._set_active_document_session(current)
+        encoded = tmp_path / "encoded.fcstm"
+        encoded.write_bytes('state Root named "全";'.encode("gb18030"))
+        monkeypatch.setattr(
+            QtWidgets.QFileDialog,
+            "getOpenFileName",
+            lambda *args, **kwargs: (str(encoded), "fcstm Files (*.fcstm)"),
+        )
+        monkeypatch.setattr(
+            QtWidgets.QInputDialog,
+            "getItem",
+            lambda *args, **kwargs: ("UTF-8", False),
+        )
+        errors = []
+        monkeypatch.setattr(
+            QtWidgets.QMessageBox,
+            "critical",
+            lambda *args, **kwargs: errors.append(args),
+        )
+
+        with qtbot.waitSignal(window.document_load_finished, timeout=3000):
+            operation = window._import_statechart()
+
+        assert window.document_session is current
+        assert not errors
+        assert operation.result.status is main_window.TaskStatus.CANCELLED
+
+    def test_import_encoding_retry_publishes_only_final_valid_session(
+        self, monkeypatch, qtbot, window, tmp_path
+    ):
+        child = tmp_path / "child.fcstm"
+        root = tmp_path / "root.fcstm"
+        child.write_bytes('state Child named "全";'.encode("gb18030"))
+        root.write_text(
+            'state Root { import "./child.fcstm" as Imported; '
+            '[*] -> Imported; Imported -> [*]; }',
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            QtWidgets.QFileDialog,
+            "getOpenFileName",
+            lambda *args, **kwargs: (str(root), "fcstm Files (*.fcstm)"),
+        )
+        monkeypatch.setattr(
+            QtWidgets.QInputDialog,
+            "getItem",
+            lambda *args, **kwargs: ("GB18030", True),
+        )
+        completed = []
+        window.document_load_finished.connect(completed.append)
+
+        with qtbot.waitSignal(window.document_load_finished, timeout=3000):
+            window._import_statechart()
+
+        assert len(completed) == 1
+        assert window.document_session.current_valid_snapshot is not None
+        assert window.document_session.encoding_hints == (
+            (str(child.resolve()), "gb18030"),
+        )
+
+    def test_projection_failure_completes_logical_load_once(
+        self, monkeypatch, qtbot, window, tmp_path
+    ):
+        source = tmp_path / "valid.fcstm"
+        source.write_text("state Root;", encoding="utf-8")
+        monkeypatch.setattr(
+            QtWidgets.QFileDialog,
+            "getOpenFileName",
+            lambda *args, **kwargs: (str(source), "fcstm Files (*.fcstm)"),
+        )
+        monkeypatch.setattr(
+            main_window,
+            "convert_state_machine_to_state_manager",
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                RuntimeError("projection failed")
+            ),
+        )
+        monkeypatch.setattr(
+            QtWidgets.QMessageBox, "critical", lambda *args, **kwargs: None
+        )
+        completed = []
+        window.document_load_finished.connect(completed.append)
+
+        operation = window._import_statechart()
+        qtbot.waitUntil(lambda: operation.result is not None, timeout=3000)
+
+        assert len(completed) == 1
+        assert operation.result is completed[0]
+        assert operation.result.status is main_window.TaskStatus.FAILED
+        assert isinstance(operation.result.ui_error, RuntimeError)
+        assert window.document_session is None
+
+    def test_ui_install_failure_restores_previous_document_and_recent_files(
+        self, monkeypatch, qtbot, window, tmp_path
+    ):
+        current_path = tmp_path / "current.fcstm"
+        next_path = tmp_path / "next.fcstm"
+        current_path.write_text("state Current;", encoding="utf-8")
+        next_path.write_text("state Next;", encoding="utf-8")
+        current = window.document_service.load(current_path)
+        window._set_active_document_session(current)
+        previous_recent = window.settings.value("recent_files", [], type=list)
+        monkeypatch.setattr(
+            QtWidgets.QFileDialog,
+            "getOpenFileName",
+            lambda *args, **kwargs: (str(next_path), "fcstm Files (*.fcstm)"),
+        )
+        real_update = main_window.update_ui_from_state_manager
+        calls = []
+
+        def fail_once(target, manager):
+            calls.append(manager.root_state.name)
+            if len(calls) == 1:
+                raise RuntimeError("ui install failed")
+            return real_update(target, manager)
+
+        monkeypatch.setattr(main_window, "update_ui_from_state_manager", fail_once)
+        monkeypatch.setattr(
+            QtWidgets.QMessageBox, "critical", lambda *args, **kwargs: None
+        )
+
+        operation = window._import_statechart()
+        qtbot.waitUntil(lambda: operation.result is not None, timeout=3000)
+
+        assert operation.result.status is main_window.TaskStatus.FAILED
+        assert window.document_session is current
+        assert window.state_manager.root_state.name == "Current"
+        assert window.source_editor.toPlainText() == "state Current;"
+        assert window.settings.value("recent_files", [], type=list) == previous_recent
+
+    def test_superseded_loads_keep_distinct_operation_results(
+        self, monkeypatch, qtbot, window, tmp_path
+    ):
+        first_path = tmp_path / "first.fcstm"
+        second_path = tmp_path / "second.fcstm"
+        first_path.write_text("state First;", encoding="utf-8")
+        second_path.write_text("state Second;", encoding="utf-8")
+        selected_paths = iter((str(first_path), str(second_path)))
+        monkeypatch.setattr(
+            QtWidgets.QFileDialog,
+            "getOpenFileName",
+            lambda *args, **kwargs: (
+                next(selected_paths),
+                "fcstm Files (*.fcstm)",
+            ),
+        )
+        real_load = window.document_service.load
+        first_started = threading.Event()
+        release_first = threading.Event()
+
+        def controlled_load(path, **kwargs):
+            if str(path) == str(first_path):
+                first_started.set()
+                release_first.wait(3)
+            return real_load(path, **kwargs)
+
+        monkeypatch.setattr(window.document_service, "load", controlled_load)
+
+        first = window._import_statechart()
+        qtbot.waitUntil(first_started.is_set, timeout=3000)
+        second = window._import_statechart()
+        release_first.set()
+        qtbot.waitUntil(
+            lambda: first.result is not None and second.result is not None,
+            timeout=3000,
+        )
+
+        assert first.operation_id != second.operation_id
+        assert first.result.operation_id == first.operation_id
+        assert first.result.status is main_window.TaskStatus.CANCELLED
+        assert second.result.operation_id == second.operation_id
+        assert second.result.status is main_window.TaskStatus.SUCCESS
+        assert window.document_session.path == str(second_path.resolve())
+
+    def test_recent_files_are_isolated_deduplicated_and_bounded(
+        self, window, tmp_path
+    ):
+        paths = [tmp_path / "{}.fcstm".format(index) for index in range(12)]
+        for path in paths:
+            window._record_recent_file(str(path))
+        window._record_recent_file(str(paths[5]))
+
+        recent = window.settings.value("recent_files", [], type=list)
+        assert len(recent) == 10
+        assert recent[0] == str(paths[5].resolve())
+        assert recent.count(str(paths[5].resolve())) == 1
 
     def test_source_editor_change_validates_latest_revision_in_background(
         self, monkeypatch, qtbot, window, tmp_path

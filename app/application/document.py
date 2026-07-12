@@ -23,6 +23,7 @@ from app.source import (
     SourceIndexError,
     SourceRef,
     StaleSourceRefError,
+    canonical_path,
     load_text_with_source_index,
 )
 
@@ -148,12 +149,21 @@ def _diagnostics_for_exception(error: BaseException) -> Tuple[Any, ...]:
 
 
 class DocumentService:
-    def load(self, path, encoding: Optional[str] = None) -> DocumentSession:
+    def load(
+        self,
+        path,
+        encoding: Optional[str] = None,
+        encoding_hints: Tuple[Tuple[str, str], ...] = (),
+    ) -> DocumentSession:
         document = SourceDocument.from_file(path, revision=0, encoding=encoding)
         session = DocumentSession.new(
             path=document.path,
             encoding=document.encoding,
             source_text=document.text,
+            encoding_hints=tuple(
+                (str(canonical_path(item_path)), item_encoding)
+                for item_path, item_encoding in encoding_hints
+            ),
         )
         return self._validate(session)
 
@@ -330,6 +340,20 @@ class DocumentService:
             raise StaleTextEditError(str(error)) from error
 
     def _validate(self, session: DocumentSession) -> DocumentSession:
+        hints = {
+            os.path.normcase(str(canonical_path(path))): encoding
+            for path, encoding in session.encoding_hints
+        }
+        if session.last_valid_snapshot is not None:
+            for document in session.last_valid_snapshot.source_index.documents.values():
+                if document.path != session.path:
+                    hints.setdefault(
+                        os.path.normcase(document.path), document.encoding
+                    )
+
+        def resolve_encoding(path):
+            return hints.get(os.path.normcase(str(canonical_path(path))))
+
         try:
             index, payload = load_text_with_source_index(
                 session.path,
@@ -340,6 +364,7 @@ class DocumentService:
                 ),
                 revision=session.source_revision,
                 encoding=session.encoding,
+                encoding_resolver=resolve_encoding,
             )
             model, report = payload
         except (GrammarParseError, SyntaxFailError) as error:

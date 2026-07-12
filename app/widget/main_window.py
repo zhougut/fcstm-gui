@@ -1,5 +1,7 @@
+from dataclasses import dataclass
 from typing import Optional, Dict, List
 import os
+import uuid
 
 import PyQt5.Qt
 from PyQt5 import QtWidgets, QtGui, QtCore
@@ -18,8 +20,9 @@ from app.application.document import (
     InvalidDocumentSaveError,
     TextEdit,
 )
-from app.application.task_runner import TaskRunner, TaskStatus
+from app.application.task_runner import TaskResult, TaskRunner, TaskStatus
 from app.model.session import ValidationState
+from app.source import SourceEncodingAmbiguityError, canonical_path
 from app.utils.dsl_to_ui import (
     convert_state_machine_to_state_manager,
     extract_variable_definitions,
@@ -41,12 +44,55 @@ from .dialog_add_lifecycle import DialogAddLifecycle
 from .dialog_add_transition import DialogAddTransition
 import re
 
+
+@dataclass(frozen=True)
+class DocumentLoadOutcome:
+    operation_id: str
+    task_result: TaskResult
+    ui_error: Optional[BaseException] = None
+    logical_status: Optional[TaskStatus] = None
+
+    @property
+    def status(self):
+        if self.logical_status is not None:
+            return self.logical_status
+        return TaskStatus.FAILED if self.ui_error is not None else self.task_result.status
+
+    @property
+    def value(self):
+        return self.task_result.value
+
+    @property
+    def error(self):
+        return self.ui_error if self.ui_error is not None else self.task_result.error
+
+
+class DocumentLoadOperation(QtCore.QObject):
+    finished = QtCore.pyqtSignal(object)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.operation_id = uuid.uuid4().hex
+        self.current_attempt = None
+        self.result = None
+
+    def cancel(self):
+        if self.current_attempt is not None:
+            self.current_attempt.cancel()
+
+    def finish(self, outcome):
+        if self.result is not None:
+            return
+        self.result = outcome
+        self.finished.emit(outcome)
+
+
 class AppMainWindow(QMainWindow, UIMainWindow):
     document_load_finished = QtCore.pyqtSignal(object)
     document_validation_finished = QtCore.pyqtSignal(object)
     state_manager: Optional[StateManager]
 
-    def __init__(self):
+    def __init__(self, settings=None):
         QMainWindow.__init__(self)
         self.setupUi(self)
         self.at_page_initial = True
@@ -55,9 +101,13 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self.state_machine_file_path = "./"
         self.document_service = DocumentService()
         self.document_session = None
+        self.settings = settings if settings is not None else QtCore.QSettings(
+            "zhougut", "fcstm-gui"
+        )
         self.task_runner = TaskRunner(parent=self)
         self._setting_source_text = False
         self._setting_projection = False
+        self._document_load_requests = {}
         self._variable_edit_timer = QtCore.QTimer(self)
         self._variable_edit_timer.setSingleShot(True)
         self._variable_edit_timer.setInterval(300)
@@ -690,22 +740,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
             # 更新上次使用的路径
             self.state_machine_file_path = os.path.dirname(file_path)
             
-            service = self.document_service
-
-            def load_document(token):
-                token.raise_if_cancelled()
-                session = service.load(file_path)
-                token.raise_if_cancelled()
-                return session
-
-            handle = self.task_runner.submit(
-                "document-load",
-                0,
-                load_document,
-                channel="document-load",
-            )
-            handle.finished.connect(self._finish_document_load)
-            return handle
+            return self._start_document_load(file_path)
                 
         except Exception as e:
             QtWidgets.QMessageBox.critical(
@@ -733,23 +768,118 @@ class AppMainWindow(QMainWindow, UIMainWindow):
             return self._save_current_document()
         return True
 
+    def _start_document_load(
+        self, file_path, encoding=None, encoding_hints=(), operation=None
+    ):
+        service = self.document_service
+        operation = operation or DocumentLoadOperation(parent=self)
+
+        def load_document(token):
+            token.raise_if_cancelled()
+            session = service.load(
+                file_path,
+                encoding=encoding,
+                encoding_hints=encoding_hints,
+            )
+            token.raise_if_cancelled()
+            return session
+
+        handle = self.task_runner.submit(
+            "document-load",
+            0,
+            load_document,
+            channel="document-load",
+        )
+        operation.current_attempt = handle
+        self._document_load_requests[handle.stamp.task_id] = (
+            operation,
+            file_path,
+            encoding,
+            tuple(encoding_hints),
+        )
+        handle.finished.connect(self._finish_document_load)
+        return operation
+
+    def _prompt_source_encoding(self, path):
+        label, accepted = QtWidgets.QInputDialog.getItem(
+            self,
+            "选择源码编码",
+            "{} 的编码：".format(path),
+            ("UTF-8", "GB18030", "Big5"),
+            0,
+            False,
+        )
+        if not accepted:
+            return None
+        return {
+            "UTF-8": "utf-8",
+            "GB18030": "gb18030",
+            "Big5": "big5",
+        }[label]
+
     @QtCore.pyqtSlot(object)
     def _finish_document_load(self, result):
+        request = self._document_load_requests.pop(
+            result.stamp.task_id, (None, None, None, ())
+        )
+        operation, file_path, encoding, encoding_hints = request
+        retrying = False
+        ui_error = None
+        logical_status = None
         try:
             if result.status is not TaskStatus.SUCCESS:
                 if result.status is TaskStatus.FAILED:
-                    QtWidgets.QMessageBox.critical(
-                        self,
-                        "导入失败",
-                        "读取fcstm文件时发生错误：\n{}".format(result.error),
-                        QtWidgets.QMessageBox.Ok,
-                    )
+                    if isinstance(
+                        result.error, (SourceEncodingAmbiguityError, UnicodeError)
+                    ) and file_path is not None:
+                        selected = self._prompt_source_encoding(file_path)
+                        if selected is not None:
+                            retrying = True
+                            self._start_document_load(
+                                file_path,
+                                encoding=selected,
+                                encoding_hints=encoding_hints,
+                                operation=operation,
+                            )
+                            return
+                        logical_status = TaskStatus.CANCELLED
+                    else:
+                        QtWidgets.QMessageBox.critical(
+                            self,
+                            "导入失败",
+                            "读取fcstm文件时发生错误：\n{}".format(result.error),
+                            QtWidgets.QMessageBox.Ok,
+                        )
                 return
             session = result.value
             if session.validation_state not in {
                 ValidationState.VALID,
                 ValidationState.VALID_WITH_WARNINGS,
             }:
+                decode_error = next(
+                    (
+                        item
+                        for item in session.current_diagnostics
+                        if getattr(item, "operation", None) == "decode"
+                        and getattr(item, "path", None)
+                    ),
+                    None,
+                )
+                if decode_error is not None and file_path is not None:
+                    selected = self._prompt_source_encoding(decode_error.path)
+                    if selected is not None:
+                        hints = dict(encoding_hints)
+                        hints[decode_error.path] = selected
+                        retrying = True
+                        self._start_document_load(
+                            file_path,
+                            encoding=encoding,
+                            encoding_hints=tuple(hints.items()),
+                            operation=operation,
+                        )
+                        return
+                    logical_status = TaskStatus.CANCELLED
+                    return
                 self._set_active_document_session(session)
                 detail = "\n".join(str(item) for item in session.current_diagnostics)
                 QtWidgets.QMessageBox.critical(
@@ -759,16 +889,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
                     QtWidgets.QMessageBox.Ok,
                 )
                 return
-            try:
-                self.document_service.require_current_valid_snapshot(session)
-            except DocumentDependencyStaleError as error:
-                QtWidgets.QMessageBox.critical(
-                    self,
-                    "导入失败",
-                    "依赖文件在加载期间发生变化：\n{}".format(error),
-                    QtWidgets.QMessageBox.Ok,
-                )
-                return
+            self.document_service.require_current_valid_snapshot(session)
             snapshot = session.require_current_valid_snapshot()
             manager = convert_state_machine_to_state_manager(
                 snapshot.model,
@@ -776,17 +897,34 @@ class AppMainWindow(QMainWindow, UIMainWindow):
                 source_index=snapshot.source_index,
             )
             self._set_active_document_session(session, manager=manager)
+        except DocumentDependencyStaleError as error:
+            ui_error = error
+            QtWidgets.QMessageBox.critical(
+                self,
+                "导入失败",
+                "依赖文件在加载期间发生变化：\n{}".format(error),
+                QtWidgets.QMessageBox.Ok,
+            )
+        except BaseException as error:
+            ui_error = error
+            QtWidgets.QMessageBox.critical(
+                self,
+                "导入失败",
+                "加载结果无法安装到界面：\n{}".format(error),
+                QtWidgets.QMessageBox.Ok,
+            )
         finally:
-            self.document_load_finished.emit(result)
+            if not retrying and operation is not None:
+                outcome = DocumentLoadOutcome(
+                    operation_id=operation.operation_id,
+                    task_result=result,
+                    ui_error=ui_error,
+                    logical_status=logical_status,
+                )
+                operation.finish(outcome)
+                self.document_load_finished.emit(outcome)
 
     def _set_active_document_session(self, session, manager=None):
-        self.document_session = session
-        self._setting_source_text = True
-        try:
-            self.source_editor.setPlainText(session.source_text)
-        finally:
-            self._setting_source_text = False
-        self.source_dock.show()
         if manager is None and session.current_valid_snapshot is not None:
             snapshot = session.current_valid_snapshot
             manager = convert_state_machine_to_state_manager(
@@ -794,16 +932,66 @@ class AppMainWindow(QMainWindow, UIMainWindow):
                 extract_variable_definitions(session.source_text),
                 source_index=snapshot.source_index,
             )
-        if manager is None:
-            self._clear_model_projection()
-        else:
-            self.state_manager = manager
+
+        previous_session = self.document_session
+        previous_manager = getattr(self, "state_manager", None)
+        previous_source_text = self.source_editor.toPlainText()
+        previous_dock_visible = self.source_dock.isVisible()
+        previous_page = self.stackedWidget_state_machine.currentIndex()
+        previous_at_initial = self.at_page_initial
+        try:
+            self._setting_source_text = True
+            try:
+                self.source_editor.setPlainText(session.source_text)
+            finally:
+                self._setting_source_text = False
+            self.source_dock.show()
             self._setting_projection = True
             try:
-                update_ui_from_state_manager(self, manager)
+                if manager is None:
+                    self._clear_model_projection()
+                else:
+                    update_ui_from_state_manager(self, manager)
             finally:
                 self._setting_projection = False
+        except BaseException:
+            self.document_session = previous_session
+            self.state_manager = previous_manager
+            self._setting_source_text = True
+            try:
+                self.source_editor.setPlainText(previous_source_text)
+            finally:
+                self._setting_source_text = False
+            self._setting_projection = True
+            try:
+                if previous_manager is None:
+                    self._clear_model_projection()
+                else:
+                    update_ui_from_state_manager(self, previous_manager)
+            finally:
+                self._setting_projection = False
+                self.at_page_initial = previous_at_initial
+                self.stackedWidget_state_machine.setCurrentIndex(previous_page)
+                self.source_dock.setVisible(previous_dock_visible)
+                self._update_document_actions()
+            raise
+
+        self.document_session = session
+        self.state_manager = manager
+        self._record_recent_file(session.path)
         self._update_document_actions()
+
+    def _record_recent_file(self, path):
+        canonical = str(canonical_path(path))
+        canonical_key = os.path.normcase(canonical)
+        recent = list(self.settings.value("recent_files", [], type=list))
+        recent = [
+            item
+            for item in recent
+            if os.path.normcase(str(canonical_path(item))) != canonical_key
+        ]
+        recent.insert(0, canonical)
+        self.settings.setValue("recent_files", recent[:10])
 
     def _clear_model_projection(self):
         self.state_manager = None

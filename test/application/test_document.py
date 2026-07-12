@@ -317,3 +317,35 @@ def test_loading_failure_does_not_mutate_existing_session(tmp_path):
 
     assert current.source_text == VALID_SOURCE
     assert current.validation_state is ValidationState.VALID
+
+
+@pytest.mark.unittest
+def test_import_encoding_hint_survives_dirty_revalidation(tmp_path):
+    child = tmp_path / "child.fcstm"
+    root = tmp_path / "root.fcstm"
+    child_text = 'state Child named "状态";'
+    child.write_bytes(child_text.encode("gb18030"))
+    root.write_text(
+        'state Root { import "./child.fcstm" as Imported; '
+        '[*] -> Imported; Imported -> [*]; }',
+        encoding="utf-8",
+    )
+    service = DocumentService()
+
+    session = service.load(
+        root,
+        encoding_hints=((str(child), "gb18030"),),
+    )
+    changed = service.replace_source_text(
+        session,
+        "// dirty\n" + session.source_text,
+    )
+
+    assert changed.current_valid_snapshot is not None
+    assert changed.encoding_hints == ((str(child.resolve()), "gb18030"),)
+    imported = next(
+        document
+        for document in changed.current_valid_snapshot.source_index.documents.values()
+        if document.path == str(child.resolve())
+    )
+    assert imported.text == child_text
