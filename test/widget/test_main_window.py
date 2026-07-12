@@ -1747,7 +1747,9 @@ state TrafficLight {
         assert window.event_table.height() >= 60
         assert window.event_reference_table.height() >= 60
         assert window.task_result_dock.isVisible()
-        assert 150 <= window.task_result_dock.height() <= 230
+        assert 150 <= window.task_result_dock.widget().height() <= 220
+        # Native dock title bars differ by platform (macOS adds about 19 px).
+        assert window.task_result_dock.height() <= 260
         assert [
             window.workspace_tabs.tabText(index)
             for index in range(6)
