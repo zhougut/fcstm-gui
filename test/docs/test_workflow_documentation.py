@@ -156,6 +156,10 @@ def test_build_workflow_keeps_fresh_products_independent_of_host_toolchains():
     assert "purpose=evidence-control-plane-only" in verify
     assert "project_imports=forbidden" in verify
     assert "product_execution=forbidden" in verify
+    coverage_step = workflow.split(
+        "- name: M7 application service branch coverage gate", 1
+    )[1].split("- name: Generate, compile, and execute all five templates", 1)[0]
+    assert 'export PATH="$PATH:$MINGW_BIN"' in coverage_step
 
 
 def test_workflow_manifest_is_source_only_and_manually_reviewed(manifest):

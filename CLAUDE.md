@@ -84,6 +84,9 @@ always expose the same contract.
   frozen-product execution. Resolve and execute every shadow command first and
   require exit code 127; retain that preflight log as evidence. Restore the host
   PATH only in the later evidence-control-plane step and record that interpreter.
+- Every Windows step that imports CairoSVG, including isolated coverage gates,
+  must append the MSYS2 MinGW runtime directory to PATH. Environment changes
+  inside one GitHub Actions shell step do not carry into the next step.
 - Watch every workflow job and inspect logs and produced artifacts. A green build
   job does not compensate for a skipped or failed fresh-runner verification job.
 - After each CI fix, push the smallest coherent commit and watch the replacement

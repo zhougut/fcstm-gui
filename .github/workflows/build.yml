@@ -165,6 +165,7 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
+          if [ -n "${MINGW_BIN:-}" ]; then export PATH="$PATH:$MINGW_BIN"; fi
           python -m coverage run --branch -m pytest \
             test/application/test_simulation.py \
             test/application/test_graph_render.py \
