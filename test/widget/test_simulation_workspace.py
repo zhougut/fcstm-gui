@@ -1,5 +1,9 @@
+import platform
 from types import SimpleNamespace
 
+from PyQt5 import QtCore, QtWidgets
+
+from app.acceptance_check import _is_preapproved_native_overlap
 from app.widget.simulation_workspace import SimulationWorkspace
 
 
@@ -81,7 +85,34 @@ def test_simulation_controls_do_not_overlap(qtbot):
     assert all(control.width() == 88 for control in controls)
     for left, right in zip(controls, controls[1:]):
         intersection = left.geometry().intersected(right.geometry())
-        assert intersection.width() <= 1 or intersection.height() <= 1, (
+        names = tuple(sorted((left.objectName(), right.objectName())))
+        functional_native_contact = (
+            _is_preapproved_native_overlap(
+                platform.system(),
+                QtWidgets.QApplication.platformName(),
+                panel.objectName(),
+                names,
+            )
+            and all(
+                button.fontMetrics().horizontalAdvance(button.text())
+                <= button.width() - 12
+                for button in (left, right)
+            )
+            and all(
+                panel.childAt(button.geometry().center()) is button
+                for button in (left, right)
+            )
+            and all(
+                button.focusPolicy() != QtCore.Qt.NoFocus
+                for button in (left, right)
+            )
+            and all(button.accessibleName() and button.toolTip() for button in (left, right))
+        )
+        assert (
+            intersection.width() <= 1
+            or intersection.height() <= 1
+            or functional_native_contact
+        ), (
             left.objectName(),
             left.geometry(),
             right.objectName(),

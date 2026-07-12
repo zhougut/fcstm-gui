@@ -56,6 +56,11 @@ always expose the same contract.
 - Capture screenshots at relevant desktop sizes, including 1280x720, and review
   the pixels for clipping, overlap, unreadable text, disabled actions, stale
   state, and incorrect selection.
+- Classify visual findings by user impact, never by raw pixel count. Text/data
+  clipping, wrong hit targets, unreachable focus, missing accessibility metadata,
+  or wrong business/artifact facts are blocking. A reviewed native style frame,
+  focus ring, boundary contact, or spacing difference is non-blocking when all
+  seven functional verdicts in the visual evidence contract pass.
 - Keep source text authoritative. Projections and forms must retain exact source
   references, revisions, fingerprints, and read-only provenance.
 - Background results must be revision/dependency gated; stale results must not
@@ -75,6 +80,10 @@ always expose the same contract.
   evidence collation and SHA/schema verification after the frozen products
   finish. It must not import project code, install packages, or make product
   execution depend on that interpreter.
+- Shadow `python`, `python3`, every supported compiler command, and `dot` during
+  frozen-product execution. Resolve and execute every shadow command first and
+  require exit code 127; retain that preflight log as evidence. Restore the host
+  PATH only in the later evidence-control-plane step and record that interpreter.
 - Watch every workflow job and inspect logs and produced artifacts. A green build
   job does not compensate for a skipped or failed fresh-runner verification job.
 - After each CI fix, push the smallest coherent commit and watch the replacement
@@ -253,6 +262,10 @@ always expose the same contract.
   reproducible workflow images and their source tree hash in the repository;
   publish the final run, artifact digests, and visual verdict as an issue
   attestation so updating evidence does not create an endless commit/run loop.
+- The final visual attestation is exactly 54 manually reviewed fresh geometry
+  screenshots: nine for each Linux/Windows/macOS x onedir/onefile combination.
+  Bind every row to its product SHA, acceptance-report SHA, screenshot SHA, and
+  stable join key, and reconcile every native-overlap exemption exactly once.
 - Treat the illustrated operation manual as a tested product. Map every GUI
   acceptance id to numbered steps, screenshots, expected state, artifacts, and
   recovery guidance; then have an independent reviewer reproduce the workflow

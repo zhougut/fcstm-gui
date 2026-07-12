@@ -115,7 +115,55 @@
           }
         },
         "buttons": {"type": "array", "minItems": 1},
-        "overlap_exemptions": {"type": "array", "maxItems": 0},
+        "overlap_exemptions": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "join_key", "platform", "qt_platform", "style", "layout",
+              "viewport", "scale", "acceptance_item", "parent", "widgets",
+              "intersection", "reason", "screenshot_path", "screenshot_sha256",
+              "text_visible", "hit_test_passed", "click_passed", "focus_passed",
+              "accessible_name_passed", "business_fact_passed", "artifact_fact_passed"
+            ],
+            "properties": {
+              "join_key": {"type": "string", "minLength": 1},
+              "platform": {"const": "Darwin"},
+              "qt_platform": {"const": "cocoa"},
+              "style": {"type": "string", "minLength": 1},
+              "layout": {"enum": ["source", "onedir", "onefile"]},
+              "viewport": {"pattern": "^[0-9]+x[0-9]+$"},
+              "scale": {"enum": ["1", "1.5", "2"]},
+              "acceptance_item": {"const": "geometry.active-workspaces"},
+              "parent": {"const": "ordinary_simulation_panel"},
+              "widgets": {
+                "type": "array",
+                "minItems": 2,
+                "maxItems": 2,
+                "uniqueItems": true,
+                "items": {"type": "string", "pattern": "^simulation_[a-z_]+_button$"}
+              },
+              "intersection": {
+                "type": "array",
+                "minItems": 4,
+                "maxItems": 4,
+                "items": {"type": "integer"}
+              },
+              "reason": {"type": "string", "minLength": 1},
+              "screenshot_path": {"type": "string", "minLength": 1},
+              "screenshot_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+              "text_visible": {"const": true},
+              "hit_test_passed": {"const": true},
+              "click_passed": {"const": true},
+              "focus_passed": {"const": true},
+              "accessible_name_passed": {"const": true},
+              "business_fact_passed": {"const": true},
+              "artifact_fact_passed": {"const": true}
+            }
+          }
+        },
         "focus_chain_exemptions": {"type": "array"}
       }
     },

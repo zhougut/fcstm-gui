@@ -132,6 +132,8 @@ jobs:
 
       - name: Tests and source product checks
         shell: bash
+        env:
+          FCSTM_GUI_PRODUCT_LAYOUT: source
         run: |
           set -o pipefail
           if [ -n "${MINGW_BIN:-}" ]; then export PATH="$PATH:$MINGW_BIN"; fi
@@ -188,6 +190,7 @@ jobs:
         shell: bash
         env:
           FCSTM_GUI_BUILD_MODE: onedir
+          FCSTM_GUI_PRODUCT_LAYOUT: onedir
         run: |
           set -o pipefail
           if [ -n "${MINGW_BIN:-}" ]; then export PATH="$PATH:$MINGW_BIN"; fi
@@ -231,6 +234,7 @@ jobs:
         shell: bash
         env:
           FCSTM_GUI_BUILD_MODE: onefile
+          FCSTM_GUI_PRODUCT_LAYOUT: onefile
         run: |
           set -o pipefail
           if [ -n "${MINGW_BIN:-}" ]; then export PATH="$PATH:$MINGW_BIN"; fi
@@ -324,6 +328,7 @@ jobs:
   verify:
     name: Verify on fresh ${{ matrix.label }}
     needs: build
+    if: ${{ always() }}
     strategy:
       fail-fast: false
       matrix:
@@ -440,12 +445,15 @@ jobs:
 
       - name: Black-box verify onedir
         shell: bash
+        env:
+          FCSTM_GUI_PRODUCT_LAYOUT: onedir
         run: |
           set -o pipefail
           mkdir -p evidence/onedir
           tool_dir="$RUNNER_TEMP/fcstm-gui-no-tools"
           mkdir -p "$tool_dir"
-          for tool in cc c++ gcc g++ clang clang++ dot; do
+          : > evidence/onedir/fresh-tool-preflight.log
+          for tool in python python3 cc c++ gcc g++ clang clang++ dot; do
             {
               echo '#!/usr/bin/env sh'
               echo "echo fresh runner forbids $tool >&2"
@@ -462,6 +470,20 @@ jobs:
           export GRAPHVIZ_DOT="$tool_dir/dot"
           export CC="$tool_dir/cc"
           export CXX="$tool_dir/c++"
+          for tool in python python3 cc c++ gcc g++ clang clang++ dot; do
+            resolved="$(command -v "$tool")"
+            printf '%s -> %s\n' "$tool" "$resolved" | tee -a evidence/onedir/fresh-tool-preflight.log
+            case "$resolved" in
+              "$tool_dir"/*) ;;
+              *) echo "$tool escaped fresh shadow: $resolved" >&2; exit 1 ;;
+            esac
+            set +e
+            "$tool" --version >> evidence/onedir/fresh-tool-preflight.log 2>&1
+            status=$?
+            set -e
+            printf '%s exit=%s\n' "$tool" "$status" | tee -a evidence/onedir/fresh-tool-preflight.log
+            test "$status" -eq 127
+          done
           executable="./extracted/fcstm-gui/${{ matrix.executable }}"
           run_gui() {
             case "$RUNNER_OS" in
@@ -494,12 +516,15 @@ jobs:
 
       - name: Black-box verify onefile
         shell: bash
+        env:
+          FCSTM_GUI_PRODUCT_LAYOUT: onefile
         run: |
           set -o pipefail
           mkdir -p evidence/onefile
           tool_dir="$RUNNER_TEMP/fcstm-gui-no-tools"
           mkdir -p "$tool_dir"
-          for tool in cc c++ gcc g++ clang clang++ dot; do
+          : > evidence/onefile/fresh-tool-preflight.log
+          for tool in python python3 cc c++ gcc g++ clang clang++ dot; do
             {
               echo '#!/usr/bin/env sh'
               echo "echo fresh runner forbids $tool >&2"
@@ -516,6 +541,20 @@ jobs:
           export GRAPHVIZ_DOT="$tool_dir/dot"
           export CC="$tool_dir/cc"
           export CXX="$tool_dir/c++"
+          for tool in python python3 cc c++ gcc g++ clang clang++ dot; do
+            resolved="$(command -v "$tool")"
+            printf '%s -> %s\n' "$tool" "$resolved" | tee -a evidence/onefile/fresh-tool-preflight.log
+            case "$resolved" in
+              "$tool_dir"/*) ;;
+              *) echo "$tool escaped fresh shadow: $resolved" >&2; exit 1 ;;
+            esac
+            set +e
+            "$tool" --version >> evidence/onefile/fresh-tool-preflight.log 2>&1
+            status=$?
+            set -e
+            printf '%s exit=%s\n' "$tool" "$status" | tee -a evidence/onefile/fresh-tool-preflight.log
+            test "$status" -eq 127
+          done
           executable="./downloaded/onefile/${{ matrix.executable }}"
           run_gui() {
             case "$RUNNER_OS" in
@@ -549,7 +588,16 @@ jobs:
       - name: Build fresh-runner evidence manifest
         shell: bash
         run: |
-          python - <<'PY'
+          control_python="$(command -v python || command -v python3)"
+          mkdir -p evidence/control-plane
+          {
+            echo "purpose=evidence-control-plane-only"
+            echo "project_imports=forbidden"
+            echo "product_execution=forbidden"
+            echo "executable=$control_python"
+            "$control_python" --version
+          } 2>&1 | tee evidence/control-plane/python.txt
+          "$control_python" - <<'PY'
           import shutil
           from pathlib import Path
 
@@ -570,7 +618,7 @@ jobs:
               if path.suffix.lower() == '.png':
                   shutil.copyfile(str(path), str(screenshots / relative))
           PY
-          python build-evidence/tools/build_acceptance_evidence.py \
+          "$control_python" build-evidence/tools/build_acceptance_evidence.py \
             --reports evidence/manifest-input/reports \
             --artifacts evidence \
             --screenshots evidence/manifest-input/screenshots \
@@ -581,7 +629,7 @@ jobs:
             --product-manifest evidence/product-manifest.json \
             --expected-product-manifest build-evidence/product-manifest.json \
             --output evidence/acceptance-evidence.json
-          python build-evidence/tools/verify_evidence_contract.py \
+          "$control_python" build-evidence/tools/verify_evidence_contract.py \
             --evidence evidence/acceptance-evidence.json \
             --reports evidence/manifest-input/reports \
             --artifact-root evidence

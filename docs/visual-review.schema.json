@@ -2,24 +2,130 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "fcstm-gui.visual-review.v1",
   "type": "object",
-  "required": ["schema", "version", "reviewer", "status", "items"],
+  "required": [
+    "schema",
+    "version",
+    "reviewer",
+    "reviewed_at",
+    "commit",
+    "run_id",
+    "samples_expected",
+    "samples_reviewed",
+    "status",
+    "items",
+    "blocking_findings",
+    "non_blocking_findings"
+  ],
   "properties": {
     "schema": {"const": "fcstm-gui.visual-review"},
     "version": {"const": 1},
     "reviewer": {"type": "string", "minLength": 1},
+    "reviewed_at": {"type": "string", "pattern": "Z$", "minLength": 20},
+    "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "run_id": {"type": "string", "pattern": "^[0-9]+$"},
+    "samples_expected": {"const": 54},
+    "samples_reviewed": {"const": 54},
     "status": {"enum": ["passed", "failed", "blocked"]},
     "items": {
       "type": "array",
+      "minItems": 54,
+      "maxItems": 54,
       "items": {
         "type": "object",
-        "required": ["image", "status", "notes"],
+        "required": [
+          "join_key",
+          "platform",
+          "qt_platform",
+          "layout",
+          "artifact",
+          "product",
+          "product_sha256",
+          "acceptance_report_path",
+          "acceptance_report_sha256",
+          "image_path",
+          "image_sha256",
+          "viewport",
+          "scale",
+          "acceptance_item",
+          "overlap_exemption_join_keys",
+          "text_visible",
+          "hit_test_passed",
+          "click_passed",
+          "focus_passed",
+          "accessible_name_passed",
+          "business_fact_passed",
+          "artifact_fact_passed",
+          "status",
+          "notes"
+        ],
         "properties": {
-          "image": {"type": "string", "minLength": 1},
-          "status": {"enum": ["passed", "failed", "blocked"]},
+          "join_key": {"type": "string", "minLength": 1},
+          "platform": {"enum": ["Linux", "Windows", "Darwin"]},
+          "qt_platform": {"enum": ["xcb", "windows", "cocoa"]},
+          "layout": {"enum": ["onedir", "onefile"]},
+          "artifact": {"type": "string", "minLength": 1},
+          "product": {"type": "string", "minLength": 1},
+          "product_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "acceptance_report_path": {"type": "string", "minLength": 1},
+          "acceptance_report_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "image_path": {"type": "string", "minLength": 1},
+          "image_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "viewport": {"enum": ["1280x720", "1920x1080"]},
+          "scale": {"enum": ["1", "1.5", "2"]},
+          "acceptance_item": {"const": "geometry.active-workspaces"},
+          "overlap_exemption_join_keys": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1}
+          },
+          "text_visible": {"const": true},
+          "hit_test_passed": {"const": true},
+          "click_passed": {"const": true},
+          "focus_passed": {"const": true},
+          "accessible_name_passed": {"const": true},
+          "business_fact_passed": {"const": true},
+          "artifact_fact_passed": {"const": true},
+          "status": {"const": "passed"},
           "notes": {"type": "string"}
         },
         "additionalProperties": false
       }
+    },
+    "blocking_findings": {
+      "type": "array",
+      "maxItems": 0,
+      "items": {"$ref": "#/$defs/blockingFinding"}
+    },
+    "non_blocking_findings": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/nonBlockingFinding"}
+    }
+  },
+  "$defs": {
+    "blockingFinding": {
+      "type": "object",
+      "required": ["id", "join_key", "category", "description", "impairs_use", "evidence_path"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "join_key": {"type": "string", "minLength": 1},
+        "category": {"enum": ["text", "click", "focus", "accessibility", "business", "artifact"]},
+        "description": {"type": "string", "minLength": 1},
+        "impairs_use": {"const": true},
+        "evidence_path": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "nonBlockingFinding": {
+      "type": "object",
+      "required": ["id", "join_key", "category", "description", "impairs_use", "evidence_path"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "join_key": {"type": "string", "minLength": 1},
+        "category": {"enum": ["native-style", "focus-ring", "boundary-contact", "spacing"]},
+        "description": {"type": "string", "minLength": 1},
+        "impairs_use": {"const": false},
+        "evidence_path": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false

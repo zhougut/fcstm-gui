@@ -9,9 +9,11 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 GUIDE = ROOT / "docs" / "完整操作验收手册.md"
+BUILD_WORKFLOW = ROOT / ".github" / "workflows" / "build.yml"
 IMAGE_ROOT = ROOT / "docs" / "images" / "workflows"
 MANIFEST = IMAGE_ROOT / "manifest.json"
 SCHEMA = ROOT / "docs" / "workflow-images.schema.json"
+VISUAL_REVIEW_SCHEMA = ROOT / "docs" / "visual-review.schema.json"
 WORKFLOWS = (
     "01-open-document",
     "02-diagnostics-navigation",
@@ -59,6 +61,7 @@ def _validate_schema(value, schema, location="$"):
         assert value >= schema.get("minimum", value), location
     if isinstance(value, list):
         assert len(value) >= schema.get("minItems", 0), location
+        assert len(value) <= schema.get("maxItems", len(value)), location
         if "items" in schema:
             for index, item in enumerate(value):
                 _validate_schema(item, schema["items"], "{}[{}]".format(location, index))
@@ -83,6 +86,59 @@ def _fenced_block(document, marker, language):
 def test_manifest_conforms_to_checked_in_strict_schema(manifest):
     schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
     _validate_schema(manifest, schema)
+
+
+def test_final_visual_review_schema_is_strict_and_function_blocking():
+    schema = json.loads(VISUAL_REVIEW_SCHEMA.read_text(encoding="utf-8"))
+    assert schema["additionalProperties"] is False
+    assert schema["properties"]["samples_expected"]["const"] == 54
+    assert schema["properties"]["samples_reviewed"]["const"] == 54
+    items = schema["properties"]["items"]
+    assert items["minItems"] == items["maxItems"] == 54
+    assert items["items"]["additionalProperties"] is False
+    assert schema["properties"]["blocking_findings"]["maxItems"] == 0
+    required = set(items["items"]["required"])
+    assert {
+        "join_key",
+        "platform",
+        "layout",
+        "artifact",
+        "product",
+        "product_sha256",
+        "acceptance_report_path",
+        "acceptance_report_sha256",
+        "image_path",
+        "image_sha256",
+        "viewport",
+        "scale",
+        "overlap_exemption_join_keys",
+    } <= required
+    for verdict in (
+        "text_visible",
+        "hit_test_passed",
+        "click_passed",
+        "focus_passed",
+        "accessible_name_passed",
+        "business_fact_passed",
+        "artifact_fact_passed",
+    ):
+        assert items["items"]["properties"][verdict]["const"] is True
+
+
+def test_build_workflow_keeps_fresh_products_independent_of_host_toolchains():
+    workflow = BUILD_WORKFLOW.read_text(encoding="utf-8")
+    verify = workflow.split("  verify:\n", 1)[1]
+    assert "needs: build\n    if: ${{ always() }}" in verify
+    assert workflow.count("FCSTM_GUI_PRODUCT_LAYOUT:") == 5
+    assert "FCSTM_GUI_PRODUCT_LAYOUT: source" in workflow
+    assert workflow.count("FCSTM_GUI_PRODUCT_LAYOUT: onedir") == 2
+    assert workflow.count("FCSTM_GUI_PRODUCT_LAYOUT: onefile") == 2
+    shadow_loop = "for tool in python python3 cc c++ gcc g++ clang clang++ dot; do"
+    assert verify.count(shadow_loop) == 4
+    assert verify.count('test "$status" -eq 127') == 2
+    assert "purpose=evidence-control-plane-only" in verify
+    assert "project_imports=forbidden" in verify
+    assert "product_execution=forbidden" in verify
 
 
 def test_workflow_manifest_is_source_only_and_manually_reviewed(manifest):
@@ -235,6 +291,13 @@ def test_guide_supplies_reproducible_fixtures_and_failure_oracles():
     )
     for text in required:
         assert text in guide
+    assert "parent directory" in guide
+    assert "basename" in guide
+    assert "AcceptRole" in guide
+    assert "N/A（同步完成，无可观察 running 态）" in guide
+    assert "不妨碍使用" in guide
+    assert "hit-test" in guide
+    assert "business_fact_passed" in guide
 
 
 def test_coverage_matrix_expands_stable_ids_without_family_wildcards():

@@ -3,7 +3,11 @@ from __future__ import unicode_literals
 import hashlib
 import json
 
-from app.acceptance_check import _parse_viewport, run_acceptance_check
+from app.acceptance_check import (
+    _is_preapproved_native_overlap,
+    _parse_viewport,
+    run_acceptance_check,
+)
 
 
 def test_parse_viewport_rejects_malformed_or_too_small_values():
@@ -15,6 +19,28 @@ def test_parse_viewport_rejects_malformed_or_too_small_values():
             pass
         else:
             raise AssertionError("invalid viewport accepted: " + value)
+
+
+def test_native_overlap_preapproval_is_exact_and_function_oriented():
+    allowed = (
+        "simulation_cycle_button",
+        "simulation_initialize_button",
+    )
+    assert _is_preapproved_native_overlap(
+        "Darwin", "cocoa", "ordinary_simulation_panel", allowed
+    )
+    assert not _is_preapproved_native_overlap(
+        "Linux", "xcb", "ordinary_simulation_panel", allowed
+    )
+    assert not _is_preapproved_native_overlap(
+        "Darwin", "cocoa", "graph_panel", allowed
+    )
+    assert not _is_preapproved_native_overlap(
+        "Darwin",
+        "cocoa",
+        "ordinary_simulation_panel",
+        ("simulation_cancel_button", "unknown_button"),
+    )
 
 
 def test_full_gui_acceptance_writes_report(qtbot, tmp_path, monkeypatch):
@@ -188,6 +214,14 @@ def test_full_gui_acceptance_writes_report(qtbot, tmp_path, monkeypatch):
         for item in report["results"]
     )
     assert len(report["artifacts"]) >= len(report["results"])
+    artifact_records = {}
+    for item in report["artifacts"]:
+        identity = (item["size"], item["sha256"])
+        assert artifact_records.setdefault(item["path"], identity) == identity
+        path = artifact_dir / item["path"]
+        data = path.read_bytes()
+        assert len(data) == item["size"]
+        assert hashlib.sha256(data).hexdigest() == item["sha256"]
     assert report["geometry"]["viewport"] == "1280x720"
     assert report["geometry"]["font_family"] == "Noto Sans CJK SC"
     assert report["geometry"]["font_point_size"] == 10
@@ -259,3 +293,38 @@ def test_acceptance_schema_requires_item_evidence_and_artifacts():
         "current_items",
         "overlaps",
     }
+    exemption_schema = geometry_schema["properties"]["overlap_exemptions"]["items"]
+    assert exemption_schema["additionalProperties"] is False
+    assert set(exemption_schema["required"]) >= {
+        "join_key",
+        "platform",
+        "qt_platform",
+        "style",
+        "layout",
+        "viewport",
+        "scale",
+        "acceptance_item",
+        "parent",
+        "widgets",
+        "intersection",
+        "reason",
+        "screenshot_path",
+        "screenshot_sha256",
+        "text_visible",
+        "hit_test_passed",
+        "click_passed",
+        "focus_passed",
+        "accessible_name_passed",
+        "business_fact_passed",
+        "artifact_fact_passed",
+    }
+    for key in (
+        "text_visible",
+        "hit_test_passed",
+        "click_passed",
+        "focus_passed",
+        "accessible_name_passed",
+        "business_fact_passed",
+        "artifact_fact_passed",
+    ):
+        assert exemption_schema["properties"][key] == {"const": True}
