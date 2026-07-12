@@ -30,6 +30,13 @@ from .formulas import (
     FormulaValidationService,
     FormulaValidationStatus,
 )
+from .export import EXPORT_KINDS, ExportResult, ExportService
+from .generation import (
+    GeneratedFile,
+    GenerationResult,
+    GenerationService,
+    TemplateDescriptor,
+)
 from .task_runner import CancellationToken, TaskRunner, TaskStatus
 from .dynamic_validation import (
     DynamicValidationCaseReport,
@@ -75,12 +82,18 @@ __all__ = [
     "EventProjectionError",
     "EventProjectionService",
     "EventReadOnlyError",
+    "EXPORT_KINDS",
+    "ExportResult",
+    "ExportService",
     "FormulaKind",
     "FormulaLocation",
     "FormulaValidationRequest",
     "FormulaValidationResult",
     "FormulaValidationService",
     "FormulaValidationStatus",
+    "GeneratedFile",
+    "GenerationResult",
+    "GenerationService",
     "HistoryCorruptWarning",
     "HistoryTaskStatus",
     "InvalidEventNameError",
@@ -96,6 +109,7 @@ __all__ = [
     "TaskRecord",
     "TaskRunner",
     "TaskStatus",
+    "TemplateDescriptor",
     "TextEdit",
     "TextTransactionCommand",
     "SuggestedFix",

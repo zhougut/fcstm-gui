@@ -2,6 +2,7 @@ from dataclasses import dataclass, replace
 from typing import Optional
 import json
 import os
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -36,11 +37,14 @@ from app.application.diagnostics import (
     DiagnosticSourceKind,
 )
 from app.application.dynamic_validation import DynamicValidationService
+from app.application.export import ExportService
+from app.application.generation import GenerationService
 from app.application.simulation import SimulationService
 from app.application.task_runner import (
     TaskResult,
     TaskRunner,
     TaskStamp,
+    TaskStaleError,
     TaskStatus,
 )
 from app.application.tasks import (
@@ -65,16 +69,17 @@ from app.utils.ui_to_dsl import (
     format_transition_item,
 )
 from .dialog_edit_state import DialogEditState
-from .dialog_show_graph import DialogShowGraph
 from app.utils.ui_to_dsl import state_manager_to_dsl
 from .dialog_show_error import DialogShowError
 from .dialog_code_gen import DialogCodeGen
+from .dialog_export import DialogExport
 from .dialog_add_lifecycle import DialogAddLifecycle
 from .dialog_add_transition import DialogAddTransition
 from .task_result_dock import TaskResultDock
 from .diagnostics_panel import DiagnosticsPanel
 from .dynamic_validation_workspace import DynamicValidationWorkspace
 from .simulation_workspace import SimulationWorkspace
+from .graph_workspace import GraphWorkspace
 import re
 
 
@@ -120,12 +125,30 @@ class DocumentLoadOperation(QtCore.QObject):
         self.finished.emit(outcome)
 
 
+class _StampedTaskToken(object):
+    def __init__(self, token, stamp_is_current):
+        self._token = token
+        self._stamp_is_current = stamp_is_current
+
+    @property
+    def cancelled(self):
+        return self._token.cancelled
+
+    def raise_if_cancelled(self):
+        self._token.raise_if_cancelled()
+        if not self._stamp_is_current():
+            raise TaskStaleError("task stamp became stale before artifact publication")
+
+
 class AppMainWindow(QMainWindow, UIMainWindow):
     document_load_finished = QtCore.pyqtSignal(object)
     document_validation_finished = QtCore.pyqtSignal(object)
     model_check_finished = QtCore.pyqtSignal(object)
     simulation_task_finished = QtCore.pyqtSignal(object)
     dynamic_validation_finished = QtCore.pyqtSignal(object)
+    graph_task_finished = QtCore.pyqtSignal(object)
+    generation_finished = QtCore.pyqtSignal(object)
+    unified_export_finished = QtCore.pyqtSignal(object)
     state_manager: Optional[StateManager]
 
     def __init__(
@@ -148,6 +171,8 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self.event_service = EventProjectionService(self.document_service)
         self.simulation_service = SimulationService()
         self.dynamic_validation_service = DynamicValidationService()
+        self.generation_service = GenerationService()
+        self.export_service = ExportService()
         self._simulation_session = None
         self._workspace_task_actions = {}
         self.document_session = None
@@ -190,6 +215,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self._init_source_editor()
         self._init_diagnostics_panel()
         self._init_workbench_layout()
+        self._init_graph_workspace()
         self._init_simulation_workspace()
         self._init_dynamic_validation_workspace()
         self._init_event_panel()
@@ -264,6 +290,10 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self.action_save_state_machine.setShortcut(QtGui.QKeySequence.Save)
         self.menu_file.addAction(self.action_save_state_machine)
         self.menu_file.addAction(self.action_export_state_machine)
+        self.action_unified_export = QtWidgets.QAction("统一导出", self)
+        self.action_unified_export.setObjectName("action_unified_export")
+        self.action_unified_export.setShortcut("Ctrl+Shift+X")
+        self.menu_file.addAction(self.action_unified_export)
 
         self.menu_edit = self.menuBar().addMenu("编辑")
         self.action_undo = QtWidgets.QAction("撤销", self)
@@ -294,6 +324,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self.action_import_state_machine.triggered.connect(self._import_statechart)
         self.action_save_state_machine.triggered.connect(self._save_current_document)
         self.action_export_state_machine.triggered.connect(self._export_statechart)
+        self.action_unified_export.triggered.connect(self._show_unified_export)
         self.action_validate_state_machine.triggered.connect(self._validate_statechart)
         self.action_graph_gen.triggered.connect(self._graph_gen)
         self.action_code_gen.triggered.connect(self._code_gen)
@@ -397,10 +428,6 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         )
 
     def _init_workbench_layout(self):
-        for page in (self.graph_workspace,):
-            self.workspace_tabs.setTabEnabled(
-                self.workspace_tabs.indexOf(page), False
-            )
         self.model_explorer_dock.hide()
         self.property_inspector_dock.hide()
         self.action_toggle_model_explorer = (
@@ -423,6 +450,19 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self.menu_view.addAction(self.action_toggle_property_inspector)
         self.setCorner(Qt.BottomLeftCorner, Qt.BottomDockWidgetArea)
         self.setCorner(Qt.BottomRightCorner, Qt.BottomDockWidgetArea)
+
+    def _init_graph_workspace(self):
+        layout = self.graph_workspace.layout()
+        if layout is None:
+            layout = QtWidgets.QVBoxLayout(self.graph_workspace)
+            layout.setContentsMargins(0, 0, 0, 0)
+        self.graph_panel = GraphWorkspace(self.graph_workspace)
+        layout.addWidget(self.graph_panel)
+        self.graph_panel.refresh_requested.connect(self._refresh_graph)
+        self.graph_panel.export_requested.connect(self._export_graph_kind)
+        self.graph_panel.cancel_requested.connect(
+            lambda: self._cancel_workspace_kind("graph-render")
+        )
 
     def _init_simulation_workspace(self):
         layout = self.simulation_workspace.layout()
@@ -1536,6 +1576,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self.action_save_state_machine.setEnabled(session is not None)
         self.action_graph_gen.setEnabled(current_valid)
         self.action_code_gen.setEnabled(current_valid)
+        self.action_unified_export.setEnabled(current_valid)
         self.action_undo.setEnabled(
             session is not None
             and (
@@ -1561,7 +1602,11 @@ class AppMainWindow(QMainWindow, UIMainWindow):
             diagnostics_index, session is not None
         )
         snapshot = session.current_valid_snapshot if current_valid else None
-        for page in (self.simulation_workspace, self.dynamic_validation_workspace):
+        for page in (
+            self.graph_workspace,
+            self.simulation_workspace,
+            self.dynamic_validation_workspace,
+        ):
             self.workspace_tabs.setTabEnabled(
                 self.workspace_tabs.indexOf(page), current_valid
             )
@@ -1571,6 +1616,11 @@ class AppMainWindow(QMainWindow, UIMainWindow):
             current_valid, revision=revision, fingerprint=fingerprint
         )
         self.dynamic_validation_panel.set_document_available(current_valid)
+        self.graph_panel.set_available(
+            current_valid,
+            revision=revision,
+            selected_path=self._selected_state_path(),
+        )
         if self._simulation_session is not None and not (
             current_valid
             and self._simulation_session.matches(revision, fingerprint)
@@ -1857,6 +1907,8 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self.task_runner.supersede(
             "dynamic-validation", self.document_session.session_id
         )
+        for channel in ("graph-render", "code-generation", "unified-export"):
+            self.task_runner.supersede(channel, self.document_session.session_id)
         self.document_session = pending
         self._clear_model_projection()
         self._update_document_actions()
@@ -2181,63 +2233,45 @@ class AppMainWindow(QMainWindow, UIMainWindow):
             self.model_check_finished.emit(result)
 
     def _graph_gen(self):
-        try:
-            if self.state_manager is None:
-                QtWidgets.QMessageBox.warning(
-                    self,
-                    "警告",
-                    "请先创建或导入状态机！",
-                    QtWidgets.QMessageBox.Ok
-                )
-                return
-            model = None
-            if self.document_session is not None:
-                snapshot = self._require_current_snapshot_for_action("状态图")
-                if snapshot is None:
-                    return
-                model = snapshot.model
-            dialog_show_graph = DialogShowGraph(
-                self, self.state_manager, model=model
-            )
-            dialog_show_graph.exec_()
-
-        except Exception as e:
-            QtWidgets.QMessageBox.critical(
-                self,
-                "错误",
-                f"生成状态图时发生错误：\n{str(e)}",
-                QtWidgets.QMessageBox.Ok
-            )
+        if self._require_current_snapshot_for_action("状态图") is None:
+            return None
+        self.workspace_tabs.setCurrentWidget(self.graph_workspace)
+        return self._refresh_graph()
 
     def _code_gen(self):
-        """代码生成功能"""
-        try:
-            if self.state_manager is None:
-                QtWidgets.QMessageBox.warning(
-                    self,
-                    "警告",
-                    "请先创建或导入状态机！",
-                    QtWidgets.QMessageBox.Ok
-                )
-                return
-            
-            # 显示代码生成对话框
-            model = None
-            if self.document_session is not None:
-                snapshot = self._require_current_snapshot_for_action("代码生成")
-                if snapshot is None:
-                    return
-                model = snapshot.model
-            dialog = DialogCodeGen(self, self.state_manager, model=model)
-            dialog.exec_()
-            
-        except Exception as e:
-            QtWidgets.QMessageBox.critical(
-                self,
-                "错误",
-                f"代码生成时发生错误：\n{str(e)}",
-                QtWidgets.QMessageBox.Ok
-            )
+        snapshot = self._require_current_snapshot_for_action("代码生成")
+        if snapshot is None:
+            return None
+        dialog = DialogCodeGen(
+            self,
+            self.generation_service.list_templates(),
+            state_manager=self.state_manager,
+            model=snapshot.model,
+        )
+        dialog.generate_requested.connect(
+            lambda request: self._start_generation(request, dialog)
+        )
+        dialog.cancel_requested.connect(
+            lambda: self._cancel_workspace_kind("code-generation")
+        )
+        dialog.exec_()
+        return dialog
+
+    def _show_unified_export(self):
+        if self._require_current_snapshot_for_action("统一导出") is None:
+            return None
+        dialog = DialogExport(
+            self,
+            dynamic_available=self.dynamic_validation_panel.report_json() is not None,
+        )
+        dialog.export_requested.connect(
+            lambda request: self._start_unified_export(request, dialog)
+        )
+        dialog.cancel_requested.connect(
+            lambda: self._cancel_workspace_kind("unified-export")
+        )
+        dialog.exec_()
+        return dialog
 
     def _require_current_snapshot_for_action(self, action_name):
         if self.document_session is None:
@@ -2261,6 +2295,9 @@ class AppMainWindow(QMainWindow, UIMainWindow):
             "document-validate",
             "ordinary-simulation",
             "dynamic-validation",
+            "graph-render",
+            "code-generation",
+            "unified-export",
         }:
             return True
         session = self.document_session
@@ -2309,6 +2346,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
             self._update_lifecycle_table(current_state.lifecycle)
             self._update_event_table(current_state)
             self._update_property_inspector(current_state)
+            self.graph_panel.set_selection(current_state.get_full_path())
             
         except Exception as e:
             QtWidgets.QMessageBox.critical(
@@ -3480,6 +3518,275 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self._set_active_document_session(restored)
         return True
 
+    def _submit_product_task(self, kind, action, work, summary, finished_slot):
+        session = self.document_session
+        if session is None:
+            return None
+        snapshot = self._require_current_snapshot_for_action(summary)
+        if snapshot is None:
+            return None
+        def guarded_work(token):
+            guarded = _StampedTaskToken(
+                token,
+                lambda: bool(
+                    self.document_session is not None
+                    and self.document_session.session_id == session.session_id
+                    and self.document_session.source_revision == session.source_revision
+                    and self.document_session.current_valid_snapshot is not None
+                    and self.document_session.current_valid_snapshot.dependency_fingerprint
+                    == snapshot.dependency_fingerprint
+                ),
+            )
+            return work(guarded)
+
+        handle = self.task_runner.submit(
+            kind,
+            session.source_revision,
+            guarded_work,
+            session_id=session.session_id,
+            channel=kind,
+            dependency_fingerprint=snapshot.dependency_fingerprint,
+        )
+        now = time.time()
+        self.task_center.add(
+            TaskRecord(
+                task_id=handle.stamp.task_id,
+                kind=kind,
+                session_id=session.session_id,
+                source_revision=session.source_revision,
+                dependency_fingerprints=dict(snapshot.dependency_manifest),
+                created_at=now,
+                started_at=now,
+                status=HistoryTaskStatus.RUNNING,
+                summary=summary,
+                messages=(),
+                artifacts=(),
+                retry_descriptor=None,
+                exception_chain=(),
+                boundary=TaskBoundary.EXPLICIT,
+            )
+        )
+        self._task_handles[handle.stamp.task_id] = handle
+        self._workspace_task_actions[handle.stamp.task_id] = action
+        handle.finished.connect(finished_slot)
+        self._refresh_task_result_dock(show=True)
+        return handle
+
+    def _refresh_graph(self):
+        session = self.document_session
+        if session is None or session.current_valid_snapshot is None:
+            return None
+        snapshot = session.current_valid_snapshot
+
+        def work(token):
+            with tempfile.TemporaryDirectory(prefix="fcstm-graph-preview-") as td:
+                target = Path(td) / "graph.png"
+                self.export_service.export(
+                    "png",
+                    str(target),
+                    session.source_text,
+                    snapshot.model,
+                    overwrite=True,
+                    cancel_token=token,
+                )
+                token.raise_if_cancelled()
+                return target.read_bytes()
+
+        self.graph_panel.set_busy(True, "正在渲染状态图")
+        return self._submit_product_task(
+            "graph-render",
+            {"mode": "preview", "revision": session.source_revision},
+            work,
+            "正在渲染状态图",
+            self._finish_graph_task,
+        )
+
+    def _export_graph_kind(self, kind):
+        suffix = "puml" if kind == "plantuml" else kind
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            "导出状态图",
+            "statechart." + suffix,
+            "所有文件 (*)",
+        )
+        if not path:
+            return None
+        if not path.lower().endswith("." + suffix):
+            path += "." + suffix
+        session = self.document_session
+        if session is None or session.current_valid_snapshot is None:
+            return None
+        snapshot = session.current_valid_snapshot
+
+        def work(token):
+            return self.export_service.export(
+                kind,
+                path,
+                session.source_text,
+                snapshot.model,
+                overwrite=False,
+                cancel_token=token,
+            )
+
+        self.graph_panel.set_busy(True, "正在导出状态图")
+        return self._submit_product_task(
+            "graph-render",
+            {"mode": "export", "kind": kind, "path": path},
+            work,
+            "正在导出状态图",
+            self._finish_graph_task,
+        )
+
+    @QtCore.pyqtSlot(object)
+    def _finish_graph_task(self, result):
+        action = self._workspace_task_actions.pop(result.stamp.task_id, {})
+        status = self._history_status_for_result(result)
+        artifacts = ()
+        if result.status is TaskStatus.SUCCESS and action.get("mode") == "preview":
+            self.graph_panel.present_png(result.value, action["revision"])
+            summary = "状态图已刷新"
+        elif result.status is TaskStatus.SUCCESS:
+            self.graph_panel.set_busy(False, "导出完成")
+            artifacts = (
+                TaskArtifact(label="状态图", path=result.value.path),
+            )
+            summary = "状态图导出完成"
+        elif result.status is TaskStatus.CANCELLED:
+            self.graph_panel.set_busy(False, "cancelled，未发布截断产物")
+            summary = "状态图任务已取消"
+        elif result.status is TaskStatus.STALE:
+            self.graph_panel.show_error("结果已过期，请刷新当前 revision")
+            summary = "状态图结果已过期"
+        else:
+            self.graph_panel.show_error(result.error)
+            summary = "状态图任务失败"
+        self._complete_workspace_history(
+            result, status, summary, artifacts=artifacts
+        )
+        self.graph_task_finished.emit(result)
+
+    def _start_generation(self, request, dialog):
+        session = self.document_session
+        if session is None or session.current_valid_snapshot is None:
+            dialog.show_error("当前 revision 无有效快照")
+            return None
+        snapshot = session.current_valid_snapshot
+
+        def work(token):
+            return self.generation_service.generate(
+                snapshot.model,
+                request["output_dir"],
+                template_name=request.get("template_name"),
+                custom_template_dir=request.get("custom_template_dir"),
+                overwrite=request.get("overwrite", False),
+                cancel_token=token,
+            )
+
+        dialog.set_busy(True, "正在生成代码")
+        return self._submit_product_task(
+            "code-generation",
+            {"dialog": dialog, "request": dict(request)},
+            work,
+            "正在生成代码",
+            self._finish_generation_task,
+        )
+
+    @QtCore.pyqtSlot(object)
+    def _finish_generation_task(self, result):
+        action = self._workspace_task_actions.pop(result.stamp.task_id, {})
+        dialog = action.get("dialog")
+        status = self._history_status_for_result(result)
+        artifacts = ()
+        if result.status is TaskStatus.SUCCESS:
+            if dialog is not None:
+                dialog.present_result(result.value)
+            artifacts = (
+                TaskArtifact(
+                    label="生成代码目录",
+                    path=result.value.output_dir,
+                    kind="directory",
+                    metadata={"files": len(result.value.files)},
+                ),
+            )
+            summary = "代码生成完成：{} 个文件".format(len(result.value.files))
+        elif result.status is TaskStatus.CANCELLED:
+            if dialog is not None:
+                dialog.show_cancelled()
+            summary = "代码生成已取消，既有输出未修改"
+        elif result.status is TaskStatus.STALE:
+            if dialog is not None:
+                dialog.show_error("结果已过期，请基于当前 revision 重试")
+            summary = "代码生成结果已过期"
+        else:
+            if dialog is not None:
+                dialog.show_error(result.error)
+            summary = "代码生成失败"
+        self._complete_workspace_history(
+            result, status, summary, artifacts=artifacts
+        )
+        self.generation_finished.emit(result)
+
+    def _start_unified_export(self, request, dialog):
+        session = self.document_session
+        if session is None or session.current_valid_snapshot is None:
+            dialog.show_error("当前 revision 无有效快照")
+            return None
+        snapshot = session.current_valid_snapshot
+        dynamic_json = self.dynamic_validation_panel.report_json()
+        state_manager = self.state_manager
+
+        def work(token):
+            return self.export_service.export(
+                request["kind"],
+                request["path"],
+                session.source_text,
+                snapshot.model,
+                state_manager=state_manager,
+                inspect_report=snapshot.inspect_report,
+                dynamic_report_json=dynamic_json,
+                overwrite=request.get("overwrite", False),
+                cancel_token=token,
+            )
+
+        dialog.set_busy(True, "正在导出")
+        return self._submit_product_task(
+            "unified-export",
+            {"dialog": dialog, "request": dict(request)},
+            work,
+            "正在统一导出",
+            self._finish_unified_export_task,
+        )
+
+    @QtCore.pyqtSlot(object)
+    def _finish_unified_export_task(self, result):
+        action = self._workspace_task_actions.pop(result.stamp.task_id, {})
+        dialog = action.get("dialog")
+        status = self._history_status_for_result(result)
+        artifacts = ()
+        if result.status is TaskStatus.SUCCESS:
+            if dialog is not None:
+                dialog.present_result(result.value)
+            artifacts = (
+                TaskArtifact(label="统一导出产物", path=result.value.path),
+            )
+            summary = "统一导出完成"
+        elif result.status is TaskStatus.CANCELLED:
+            if dialog is not None:
+                dialog.show_cancelled()
+            summary = "统一导出已取消，既有文件未修改"
+        elif result.status is TaskStatus.STALE:
+            if dialog is not None:
+                dialog.show_error("结果已过期，请基于当前 revision 重试")
+            summary = "统一导出结果已过期"
+        else:
+            if dialog is not None:
+                dialog.show_error(result.error)
+            summary = "统一导出失败"
+        self._complete_workspace_history(
+            result, status, summary, artifacts=artifacts
+        )
+        self.unified_export_finished.emit(result)
+
     def _submit_workspace_task(self, kind, action, work, running_summary):
         session = self.document_session
         if session is None:
@@ -3952,6 +4259,11 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         summary = {
             "document-load": "正在取消加载",
             "model-check": "正在取消模型检查",
+            "ordinary-simulation": "正在 cycle 边界取消普通仿真",
+            "dynamic-validation": "正在 step 边界取消动态验证",
+            "graph-render": "正在取消状态图任务",
+            "code-generation": "正在取消代码生成",
+            "unified-export": "正在取消统一导出",
         }.get(kind, "正在取消任务")
         try:
             self.task_center.transition(

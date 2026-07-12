@@ -103,6 +103,14 @@ always expose the same contract.
 - Byte-pinned fixture and provenance resources must have explicit Git EOL
   attributes. Windows checkout conversion is a real byte mutation; never make
   SHA-256 checks line-ending-insensitive to hide it.
+- Keep stable Qt combo identifiers as scalar strings. PyQt5 `findData()` does
+  not reliably match compound Python tuple values across QVariant boundaries.
+- Loading/progress controls must keep a stable layout footprint. Switch a
+  progress bar between determinate and indeterminate ranges instead of hiding
+  and showing it around tasks.
+- Resolve bundled resources from `_MEIPASS` when frozen and from the module's
+  repository/package root in source mode. Never assume the process cwd is the
+  project root.
 
 ## Required Local Evidence
 
