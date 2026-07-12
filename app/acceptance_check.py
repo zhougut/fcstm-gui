@@ -867,9 +867,16 @@ class AcceptanceDriver(object):
         self.window.raise_()
         self.window.activateWindow()
         receiver = self.window
-        receiver.setFocus(QtCore.Qt.ActiveWindowFocusReason)
+
+        def activate_receiver():
+            self.window.raise_()
+            self.window.activateWindow()
+            receiver.setFocus(QtCore.Qt.ActiveWindowFocusReason)
+            self.app.processEvents()
+            return self.window.isActiveWindow() and receiver.hasFocus()
+
         self._wait_until(
-            lambda: self.window.isActiveWindow() and receiver.hasFocus(),
+            activate_receiver,
             timeout_ms=15000,
         )
         QtTest.QTest.keySequence(receiver, action.shortcut())

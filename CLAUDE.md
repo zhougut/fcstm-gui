@@ -257,6 +257,10 @@ always expose the same contract.
   Keyboard acceptance must raise the product window and wait for actual active
   window plus focus state before sending the standard `Cmd` shortcut, then wait
   for the target page instead of assuming one event-loop pass is sufficient.
+- Long frozen-product runs can leave a Cocoa activation request unfulfilled
+  after many dialogs. While waiting for the real active/focus facts, repeat
+  `raise_`, `activateWindow`, and `setFocus`; one request followed by passive
+  polling can time out even though the window remains usable.
 - Qt serializes the macOS Command modifier as `Meta` in portable shortcut text.
   Cross-platform report tests must expect `Meta+<key>` on Darwin and
   `Ctrl+<key>` on Linux/Windows; hard-coding the display label is not portable.
