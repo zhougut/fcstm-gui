@@ -28,6 +28,7 @@ class GraphWorkspace(QtWidgets.QWidget):
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         controls = QtWidgets.QHBoxLayout()
+        controls.setSpacing(8)
         self.refresh_button = self._button("刷新", "graph_refresh_button")
         self.fit_button = self._button("适应", "graph_fit_button")
         self.actual_button = self._button("100%", "graph_actual_button")
@@ -35,8 +36,11 @@ class GraphWorkspace(QtWidgets.QWidget):
         self.export_combo = QtWidgets.QComboBox(self)
         self.export_combo.setObjectName("graph_export_combo")
         self.export_combo.addItems(["plantuml", "png", "svg", "pdf"])
-        self.export_combo.setMinimumWidth(100)
-        self.export_combo.setSizeAdjustPolicy(QtWidgets.QComboBox.AdjustToContents)
+        self.export_combo.setFixedWidth(100)
+        self.export_combo.setMinimumContentsLength(8)
+        self.export_combo.setSizeAdjustPolicy(
+            QtWidgets.QComboBox.AdjustToMinimumContentsLengthWithIcon
+        )
         self.export_button = self._button("导出", "graph_export_button")
         self.cancel_button = self._button("停止", "graph_cancel_button")
         for widget in (
@@ -51,7 +55,7 @@ class GraphWorkspace(QtWidgets.QWidget):
         controls.addWidget(self.export_button)
         controls.addWidget(self.cancel_button)
         layout.addLayout(controls)
-        self.status_label = QtWidgets.QLabel("当前 revision 无有效快照", self)
+        self.status_label = QtWidgets.QLabel("当前版本无有效快照", self)
         self.status_label.setObjectName("graph_status_label")
         layout.addWidget(self.status_label)
         self.view = GraphView(self)
@@ -75,6 +79,7 @@ class GraphWorkspace(QtWidgets.QWidget):
     def _button(self, text, name):
         button = QtWidgets.QPushButton(text, self)
         button.setObjectName(name)
+        button.setFixedWidth(64)
         button.setAccessibleName(text)
         button.setToolTip(text)
         return button
@@ -83,9 +88,9 @@ class GraphWorkspace(QtWidgets.QWidget):
         self._available = bool(available)
         if available:
             suffix = " | 选择 {}".format(selected_path) if selected_path else ""
-            self.status_label.setText("revision {}{}".format(revision, suffix))
+            self.status_label.setText("版本 {}{}".format(revision, suffix))
         else:
-            self.status_label.setText("当前 revision 无有效快照")
+            self.status_label.setText("当前版本无有效快照")
             self.view.setScene(None)
         self._update_actions()
 
@@ -111,7 +116,7 @@ class GraphWorkspace(QtWidgets.QWidget):
         scene.addPixmap(pixmap)
         self.view.setScene(scene)
         self._busy = False
-        self.status_label.setText("revision {} | ready".format(revision))
+        self.status_label.setText("版本 {} | 就绪".format(revision))
         self.fit_graph()
         self._update_actions()
 
@@ -129,7 +134,13 @@ class GraphWorkspace(QtWidgets.QWidget):
 
     def show_error(self, message):
         self._busy = False
-        self.status_label.setText("failed: " + str(message))
+        self.status_label.setText("失败：" + str(message))
+        self.status_label.setToolTip(str(message))
+        self._update_actions()
+
+    def show_stale(self, message):
+        self._busy = False
+        self.status_label.setText("已失效：" + str(message))
         self.status_label.setToolTip(str(message))
         self._update_actions()
 

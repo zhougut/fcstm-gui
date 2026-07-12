@@ -54,6 +54,12 @@ def test_self_check_registry_has_independent_z3_and_acceptance_items():
         "dynamic mutation mismatch",
         "dynamic restored resource rerun",
         "packaged template inventory",
+        "Smetana SVG without Graphviz",
+        "Smetana PNG without Graphviz",
+        "Smetana PDF without Graphviz",
+        "pyfcstm visualize SVG CLI",
+        "pyfcstm visualize PNG CLI",
+        "pyfcstm visualize PDF CLI",
     ):
         assert required in names
 

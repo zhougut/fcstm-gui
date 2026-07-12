@@ -800,6 +800,23 @@ def test_clear_filtered_and_clear_all_are_distinct_persistent_operations(tmp_pat
     assert json.loads(center.history_path.read_text(encoding="utf-8"))["records"] == []
 
 
+def test_clear_completed_only_removes_successful_explicit_tasks(tmp_path):
+    center = TaskCenter(data_location_provider=lambda: str(tmp_path))
+    center.add(make_record("success", status=TaskStatus.SUCCESS, finished_at=101.0))
+    center.add(make_record("failed", status=TaskStatus.FAILED, finished_at=102.0))
+    center.add(make_record("cancelled", status=TaskStatus.CANCELLED, finished_at=103.0))
+    center.add(make_record("transient", boundary=TaskBoundary.TRANSIENT))
+    center.save()
+
+    assert center.clear_completed() == 1
+    assert [item.task_id for item in center.records] == [
+        "failed",
+        "cancelled",
+        "transient",
+    ]
+    assert "success" not in center.history_path.read_text(encoding="utf-8")
+
+
 def test_clear_and_retention_never_remove_active_explicit_tasks(tmp_path):
     center = TaskCenter(
         data_location_provider=lambda: str(tmp_path),
@@ -824,6 +841,7 @@ def test_clear_and_retention_never_remove_active_explicit_tasks(tmp_path):
     center.save()
     assert [item.task_id for item in center.records] == ["running"]
     assert center.clear_filtered(lambda item: True) == 0
+    assert center.clear_completed() == 0
     assert center.clear_all_persistent() == 0
     assert center.records == (running,)
 

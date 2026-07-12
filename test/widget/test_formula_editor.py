@@ -19,6 +19,8 @@ def test_formula_editor_debounces_real_validation_and_shows_location(qtbot):
 
     assert not editor.is_valid
     assert "1:" in editor.status_label.text()
+    assert "语法错误" in editor.status_label.text()
+    assert "Invalid syntax" not in editor.status_label.text()
     assert editor.status_label.toolTip()
 
 
@@ -52,13 +54,19 @@ def test_formula_editor_drops_stale_token_and_revision_results(qtbot):
     assert editor.last_result is None
 
 
-def test_formula_editor_allows_optional_empty_and_validates_on_submit(qtbot):
+def test_formula_editor_allows_optional_empty_without_inventing_variables(qtbot):
     field = QtWidgets.QPlainTextEdit()
-    editor = FormulaEditor(field, FormulaKind.EFFECT, allow_empty=True)
+    editor = FormulaEditor(
+        field,
+        FormulaKind.EFFECT,
+        allow_empty=True,
+        variable_definitions_provider=lambda: "def int count = 0;",
+    )
     qtbot.addWidget(editor)
 
     assert editor.validate_now()
     assert editor.is_valid
+    assert editor.last_result.message == "允许留空"
 
     field.setPlainText("x = ;")
     assert not editor.validate_now()

@@ -59,6 +59,14 @@ def _check_qt_application():
     return 'event processing OK'
 
 
+def _qt_platform_name():
+    try:
+        from PyQt5.QtGui import QGuiApplication
+        return str(QGuiApplication.platformName() or '<not-created>')
+    except BaseException:
+        return '<unavailable>'
+
+
 def _pyfcstm_module_names():
     import pyfcstm
     names = []
@@ -329,13 +337,55 @@ def _check_pyfcstm_plantuml_cli():
 
 
 def _check_visualize(format_name):
+    from app.application.graph_render import GraphRenderService
+    from pyfcstm.model import load_state_machine_from_text
+    previous_dot = os.environ.get('GRAPHVIZ_DOT')
+    os.environ['GRAPHVIZ_DOT'] = os.path.join(
+        tempfile.gettempdir(), 'fcstm-gui-definitely-missing-dot'
+    )
+    try:
+        model = load_state_machine_from_text(_ACCEPTANCE_DSL)
+        with tempfile.TemporaryDirectory(prefix='fcstm-smetana-self-check-') as directory:
+            target = os.path.join(directory, 'machine.' + format_name)
+            result = GraphRenderService().render(
+                model.to_plantuml(),
+                target,
+                format_name,
+                plantuml_jar=_plantuml_path(),
+            )
+            if result.engine != 'smetana' or not result.output_sha256:
+                raise RuntimeError(format_name + ' visualization omitted Smetana provenance')
+            if result.exit_code != 0 or result.stderr:
+                raise RuntimeError(
+                    format_name + ' renderer execution failed: ' + result.stderr
+                )
+            if 'Smoke' not in result.semantic_labels:
+                raise RuntimeError(format_name + ' visualization omitted model semantics')
+            return '{} bytes, source {}, svg {}'.format(
+                result.size,
+                result.source_sha256[:12],
+                result.semantic_svg_sha256[:12],
+            )
+    finally:
+        if previous_dot is None:
+            os.environ.pop('GRAPHVIZ_DOT', None)
+        else:
+            os.environ['GRAPHVIZ_DOT'] = previous_dot
+
+
+def _check_pyfcstm_visualize_cli(format_name):
     output_name = 'machine.' + format_name
-    _, outputs = _invoke_pyfcstm(['visualize', '-i', 'acceptance.fcstm', '-o', output_name,
-                                 '--type', format_name, '--renderer', 'local',
-                                 '--plantuml-jar', _plantuml_path(), '--no-open'], [output_name])
+    _, outputs = _invoke_pyfcstm(
+        [
+            'visualize', '-i', 'acceptance.fcstm', '-o', output_name,
+            '--type', format_name, '--renderer', 'local',
+            '--plantuml-jar', _plantuml_path(), '--no-open',
+        ],
+        [output_name],
+    )
     magic = {'png': b'\x89PNG', 'svg': b'<?xml', 'pdf': b'%PDF'}[format_name]
     if not outputs[output_name].startswith(magic):
-        raise RuntimeError(format_name + ' visualization has incorrect magic')
+        raise RuntimeError(format_name + ' production CLI output has incorrect magic')
     return '{} bytes'.format(len(outputs[output_name]))
 
 
@@ -628,9 +678,12 @@ def _checks():
                    ('pyfcstm inspect human', lambda: _check_inspect('human')),
                    ('pyfcstm inspect json', lambda: _check_inspect('json')),
                    ('pyfcstm PlantUML CLI', _check_pyfcstm_plantuml_cli),
-                   ('pyfcstm visualize PNG', lambda: _check_visualize('png')),
-                   ('pyfcstm visualize SVG', lambda: _check_visualize('svg')),
-                   ('pyfcstm visualize PDF', lambda: _check_visualize('pdf')),
+                   ('Smetana SVG without Graphviz', lambda: _check_visualize('svg')),
+                   ('Smetana PNG without Graphviz', lambda: _check_visualize('png')),
+                   ('Smetana PDF without Graphviz', lambda: _check_visualize('pdf')),
+                   ('pyfcstm visualize SVG CLI', lambda: _check_pyfcstm_visualize_cli('svg')),
+                   ('pyfcstm visualize PNG CLI', lambda: _check_pyfcstm_visualize_cli('png')),
+                   ('pyfcstm visualize PDF CLI', lambda: _check_pyfcstm_visualize_cli('pdf')),
                    ('pyfcstm batch simulation CLI', _check_simulate_cli),
                    ('pyfcstm Pygments highlighting', _check_pygments_highlight),
                    ('Z3 integer SAT and model', _check_z3_integer_sat),
@@ -786,6 +839,7 @@ def run_self_check(json_report=None):
             'machine': platform.machine(),
             'python': platform.python_version(),
             'frozen': bool(getattr(sys, 'frozen', False)),
+            'qt_platform': _qt_platform_name(),
         },
         'counts': {
             'total': len(results),

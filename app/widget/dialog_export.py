@@ -149,7 +149,7 @@ class DialogExport(QtWidgets.QDialog):
         self._busy = False
         self.progress_bar.setRange(0, 1)
         self.progress_bar.setValue(0)
-        self.status_label.setText("failed: " + str(message))
+        self.status_label.setText("失败：" + str(message))
         self.status_label.setToolTip(str(message))
         self._update_actions()
 
@@ -157,7 +157,7 @@ class DialogExport(QtWidgets.QDialog):
         self._busy = False
         self.progress_bar.setRange(0, 1)
         self.progress_bar.setValue(0)
-        self.status_label.setText("cancelled，既有文件未修改")
+        self.status_label.setText("已取消，既有文件未修改")
         self._update_actions()
 
     def _update_actions(self):

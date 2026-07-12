@@ -17,6 +17,23 @@ always expose the same contract.
 - Use test-driven changes for behavior. Add a focused regression test before or
   with each bug fix, then run the broader affected suite.
 
+## Maintenance Discipline
+
+- Keep `CLAUDE.md` as the single source of agent/contributor operating memory;
+  `AGENTS.md` must remain a symlink to it, not a divergent copy.
+- When a workflow, packaging, GUI, cross-platform, or evidence problem teaches a
+  repeatable lesson, add the durable rule here in the same branch that fixes or
+  plans the issue.
+- Do not mark a requirement complete from intent, screenshots, source-only
+  tests, or stale issue checkboxes. Completion needs fresh linked evidence:
+  test/report/screenshot/artifact/CI job as applicable to that requirement.
+- Keep issue state, evidence indexes, operation manuals, and CI contracts in
+  sync. A checklist item that cannot be reproduced from clean settings remains
+  pending even if lower-level services pass.
+- Separate infrastructure commits from unfinished product work. Before pushing,
+  inspect the diff and include only the files needed for the current coherent
+  fix or evidence update.
+
 ## CLI And Self-Check Discipline
 
 - `--self-check` must execute every bundled pyfcstm library and core path; an
@@ -54,6 +71,10 @@ always expose the same contract.
 - Stage 2 uses fresh runners, installs no project Python or project dependencies,
   downloads the artifacts, and runs black-box self-check plus acceptance tests.
   Only unavoidable system runtime components such as a JRE may be installed.
+- A fresh runner may use its preinstalled Python only for standard-library
+  evidence collation and SHA/schema verification after the frozen products
+  finish. It must not import project code, install packages, or make product
+  execution depend on that interpreter.
 - Watch every workflow job and inspect logs and produced artifacts. A green build
   job does not compensate for a skipped or failed fresh-runner verification job.
 - After each CI fix, push the smallest coherent commit and watch the replacement
@@ -108,6 +129,11 @@ always expose the same contract.
 - Loading/progress controls must keep a stable layout footprint. Switch a
   progress bar between determinate and indeterminate ranges instead of hiding
   and showing it around tasks.
+- Size compact toolbars against the workspace width after docks and splitters,
+  not the top-level window width. If child minimum sizes exceed the nested
+  layout allocation, Qt can place focusable siblings on top of each other;
+  keep stable control widths and fail geometry acceptance on every real
+  overlap instead of adding platform-specific overlap exemptions.
 - Resolve bundled resources from `_MEIPASS` when frozen and from the module's
   repository/package root in source mode. Never assume the process cwd is the
   project root.
@@ -121,6 +147,12 @@ always expose the same contract.
 - Treat report JSON, logs, screenshots, and exports as first-class CI
   evidence. Produce them separately for source, onedir, onefile, and fresh
   verification instead of relying on console success text.
+- Fresh verification must independently recompute product and evidence sizes,
+  SHA-256 digests, schemas, and stable item sets. Reusing a build-stage manifest
+  without download-side comparison does not prove artifact transport integrity.
+- Evidence verification must walk reports, runtime artifacts, screenshots, and
+  product manifests. Valid report JSON does not compensate for a missing or
+  altered top-level file.
 - A generated file inventory is not runtime evidence. Execute the Python
   runtime and compile, link, and run C, C poll, C++, and C++ poll outputs on
   every native build runner.
@@ -132,6 +164,61 @@ always expose the same contract.
   OFL-licensed bundled font loaded as the application family, assert that
   family and a fixed point size in reports, and inspect fresh-runner
   screenshots before release.
+- A non-empty graph scene is not proof of a rendered state machine. PlantUML
+  can render a diagnostic image such as "Cannot find Graphviz" and still leave
+  the scene non-empty. Acceptance must assert semantic graph content, reject
+  renderer diagnostic text, and inspect Linux, Windows, and macOS screenshots.
+- Fresh verification must not install Graphviz to hide an incomplete artifact.
+  Use the PlantUML Smetana engine and test with `GRAPHVIZ_DOT` pointing to a
+  missing executable. Bind PNG/PDF evidence to a semantically validated SVG
+  from the same normalized source hash and engine.
+- PlantUML pipe execution must request UTF-8 explicitly on every OS. For
+  cancellable external rendering, retain the `Popen` handle, poll the task token,
+  and terminate/kill the child; checks only before and after a blocking call do
+  not provide a usable cancel boundary.
+- Give every acceptance case a stable parameterized id and isolated fixture or
+  proven reset. One failed GUI path must not poison later cases or collapse
+  multiple unexecuted capabilities into one broad passing item.
+- Keep internal status ids such as `failed`, `cancelled`, and `stale` in JSON or
+  tooltips. User-visible labels and recovery text must use consistent Chinese
+  wording across workspaces and dialogs.
+- Task-history cleanup commands must state distinct data boundaries. "Clear
+  completed" removes successful terminal records, while "clear all history"
+  removes all removable terminal records and never discards live tasks.
+- Keep repository documentation images separate from final-run evidence. Store
+  reproducible workflow images and their source tree hash in the repository;
+  publish the final run, artifact digests, and visual verdict as an issue
+  attestation so updating evidence does not create an endless commit/run loop.
+- Treat the illustrated operation manual as a tested product. Map every GUI
+  acceptance id to numbered steps, screenshots, expected state, artifacts, and
+  recovery guidance; then have an independent reviewer reproduce the workflow
+  from clean settings using only the manual. Iterate until no critical or
+  important documentation gaps remain.
+- Keep productization issues synchronized with current evidence. Mark an item
+  complete only when its linked test, report, screenshot, artifact, and CI job
+  prove the exact user path; do not inherit stale checkboxes from an older
+  implementation plan or extrapolate service coverage into GUI coverage.
+- Every newly discovered repeatable failure mode must be added here in the same
+  change that fixes or plans it. This file is cumulative operating memory, not
+  a one-time project description.
+- An empty clipboard paste does not delete a selected Qt field on every
+  platform. Acceptance drivers that clear text must send Select All, Backspace,
+  then paste the replacement so empty-value paths are genuinely exercised.
+- Do not type an absolute path into a non-native `QFileDialog` filename field
+  and assume Enter accepts it. Navigate the dialog to the parent directory,
+  type only the basename, wait for the AcceptRole button to enable, and click
+  that real Open/Save button.
+- A closed test window is not an isolated test window until Qt processes its
+  deferred deletion. Fresh-window acceptance must call `deleteLater`, flush
+  `DeferredDelete`, process events, and reject any visible top-level survivor.
+- Invalid syntax is a valid editable document-load result with diagnostics, not
+  an I/O load failure. Test failed-load session preservation with a real read
+  failure after file-dialog acceptance, and assert the original session,
+  manager, source, revision, and workspace remain installed.
+- Layout membership does not prove non-overlap. Inspect mapped widget rectangles
+  at runtime; in particular, Qt5 combo size-adjust policies can exceed a nested
+  layout allocation under offscreen rendering unless width policy and spacing
+  are explicit.
 
 ## Required Local Evidence
 
@@ -139,9 +226,10 @@ Before pushing a behavior change, run the smallest focused tests and then:
 
 ```bash
 QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest test -q --timeout=30
-.venv/bin/python -m compileall -q app test main.py
+.venv/bin/python -m compileall -q app test scripts main.py
 .venv/bin/python -m pip check
 xmllint --noout app/ui/main_window.ui
+python -c "import yaml; yaml.safe_load(open('.github/workflows/build.yml'))"
 git diff --check
 ```
 

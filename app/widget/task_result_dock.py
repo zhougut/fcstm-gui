@@ -16,6 +16,18 @@ _STATUS_LABELS = {
     TaskStatus.CANCELLED: "已取消",
 }
 
+_KIND_LABELS = {
+    "document-load": "文档加载",
+    "document-validate": "文档校验",
+    "model-check": "模型检查",
+    "graph-render": "状态图",
+    "ordinary-simulation": "普通仿真",
+    "dynamic-validation": "动态验证",
+    "code-generation": "代码生成",
+    "unified-export": "统一导出",
+    "task-history": "任务历史",
+}
+
 
 class TaskResultDock(QtWidgets.QDockWidget):
     retry_requested = QtCore.pyqtSignal(object)
@@ -85,7 +97,7 @@ class TaskResultDock(QtWidgets.QDockWidget):
         self.table.setToolTip("任务结果列表")
         self.table.setColumnCount(6)
         self.table.setHorizontalHeaderLabels(
-            ("状态", "任务", "revision", "摘要", "时间", "操作")
+            ("状态", "任务", "版本", "摘要", "时间", "操作")
         )
         self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
@@ -141,6 +153,9 @@ class TaskResultDock(QtWidgets.QDockWidget):
         self.clear_filtered_button = QtWidgets.QPushButton(
             "清空筛选", container
         )
+        self.clear_completed_button = QtWidgets.QPushButton(
+            "清空已完成", container
+        )
         self.clear_all_button = QtWidgets.QPushButton("清空历史", container)
         buttons = (
             (self.copy_button, "task_copy_button", "复制脱敏后的任务详情"),
@@ -165,6 +180,11 @@ class TaskResultDock(QtWidgets.QDockWidget):
                 self.clear_filtered_button,
                 "task_clear_filtered_button",
                 "删除当前筛选出的持久任务记录",
+            ),
+            (
+                self.clear_completed_button,
+                "task_clear_completed_button",
+                "仅删除成功完成的持久任务记录",
             ),
             (
                 self.clear_all_button,
@@ -197,6 +217,7 @@ class TaskResultDock(QtWidgets.QDockWidget):
             self.open_selected_artifact_directory
         )
         self.clear_filtered_button.clicked.connect(self.clear_filtered)
+        self.clear_completed_button.clicked.connect(self.clear_completed)
         self.clear_all_button.clicked.connect(self.clear_all)
 
     def sizeHint(self):
@@ -263,14 +284,19 @@ class TaskResultDock(QtWidgets.QDockWidget):
         for row, record in enumerate(self._visible_records):
             values = (
                 _STATUS_LABELS[record.status],
-                self._display_text(record.kind),
+                _KIND_LABELS.get(record.kind, self._display_text(record.kind)),
                 "r{}".format(record.source_revision),
                 self._display_text(record.summary),
                 self._format_local_time(record.created_at),
             )
             for column, value in enumerate(values):
                 item = QtWidgets.QTableWidgetItem(value)
-                item.setToolTip(value)
+                tooltip = (
+                    "{} ({})".format(value, self._display_text(record.kind))
+                    if column == 1 and value != record.kind
+                    else value
+                )
+                item.setToolTip(tooltip)
                 self.table.setItem(row, column, item)
             self.table.setCellWidget(row, 5, self._create_row_action(record))
             if record.task_id == selected_id:
@@ -513,6 +539,20 @@ class TaskResultDock(QtWidgets.QDockWidget):
         if reply != QtWidgets.QMessageBox.Yes:
             return 0
         removed = self._task_center.clear_all_persistent()
+        self.refresh()
+        return removed
+
+    def clear_completed(self):
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "清空已完成任务",
+            "仅删除成功完成的持久任务记录？失败、取消、已失效和运行中记录会保留。",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        if reply != QtWidgets.QMessageBox.Yes:
+            return 0
+        removed = self._task_center.clear_completed()
         self.refresh()
         return removed
 

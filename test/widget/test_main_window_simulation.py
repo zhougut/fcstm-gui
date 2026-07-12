@@ -1,6 +1,7 @@
 from __future__ import unicode_literals
 
 import json
+import time
 
 import pytest
 from PyQt5 import QtCore, QtWidgets
@@ -50,8 +51,8 @@ def test_ordinary_simulation_real_initialize_cycle_reset_and_task_history(
     with qtbot.waitSignal(window.simulation_task_finished, timeout=3000):
         panel.initialize_button.click()
     runtime = window._simulation_session.runtime
-    assert panel.status_label.text() == "ready"
-    assert "revision 0" in panel.stamp_label.text()
+    assert panel.status_label.text() == "就绪"
+    assert "版本 0" in panel.stamp_label.text()
     assert panel.transcript_table.rowCount() == 1
     assert panel.transcript_table.item(0, 1).text() == "Root.A"
     assert json.loads(panel.transcript_table.item(0, 5).text()) == {"x": 3, "y": 0}
@@ -91,8 +92,54 @@ def test_simulation_is_invalidated_immediately_when_source_revision_changes(
     window.source_editor.insertPlainText("\n")
 
     assert window._simulation_session is None
-    assert "stale" in window.simulation_panel.status_label.text()
+    assert "已失效" in window.simulation_panel.status_label.text()
     assert not window.simulation_panel.cycle_button.isEnabled()
+
+
+def test_continuous_simulation_pauses_at_boundary_and_continues_same_runtime(
+    monkeypatch, qtbot, simulation_window
+):
+    window = simulation_window
+    panel = window.simulation_panel
+    with qtbot.waitSignal(window.simulation_task_finished, timeout=3000):
+        panel.initialize_button.click()
+    runtime = window._simulation_session.runtime
+    original_cycle = window.simulation_service.cycle
+
+    def slow_cycle(*args, **kwargs):
+        result = original_cycle(*args, **kwargs)
+        time.sleep(0.01)
+        return result
+
+    monkeypatch.setattr(window.simulation_service, "cycle", slow_cycle)
+    panel.cycle_count.setValue(100)
+    handle = window._run_simulation(
+        {"max_cycles": panel.cycle_count.value(), "events": ()}
+    )
+    assert handle is not None
+    qtbot.waitUntil(lambda: runtime.cycle_count >= 3, timeout=3000)
+    with qtbot.waitSignal(window.simulation_task_finished, timeout=3000):
+        panel.pause_button.click()
+
+    paused_cycle = runtime.cycle_count
+    assert panel.status_label.text() == "已暂停"
+    assert panel.run_button.text() == "继续运行"
+    assert window._simulation_session.runtime is runtime
+    paused_record = [
+        item
+        for item in window.task_center.records
+        if item.kind == "ordinary-simulation"
+    ][-1]
+    assert paused_record.status is HistoryTaskStatus.SUCCESS
+    assert "已暂停" in paused_record.summary
+
+    panel.cycle_count.setValue(2)
+    with qtbot.waitSignal(window.simulation_task_finished, timeout=3000):
+        panel.run_button.click()
+
+    assert window._simulation_session.runtime is runtime
+    assert runtime.cycle_count == paused_cycle + 2
+    assert panel.status_label.text() == "就绪"
 
 
 def test_dynamic_validation_runs_frozen_suite_and_exports_versioned_report(
@@ -106,13 +153,13 @@ def test_dynamic_validation_runs_frozen_suite_and_exports_versioned_report(
     with qtbot.waitSignal(window.dynamic_validation_finished, timeout=10000):
         panel.run_suite_button.click()
 
-    assert panel.status_label.text() == "passed"
+    assert panel.status_label.text() == "通过"
     assert panel.result_table.rowCount() >= 4
     statuses = {
         panel.result_table.item(row, 2).text()
         for row in range(panel.result_table.rowCount())
     }
-    assert statuses <= {"passed", "expected_exception_passed"}
+    assert statuses <= {"通过", "预期异常通过"}
     payload = json.loads(panel.report_json())
     assert payload["schema"] == "fcstm-gui.dynamic-validation-result-bundle"
     assert payload["provenance"]["status"] == "passed"
@@ -173,7 +220,7 @@ def test_dynamic_user_scenario_uses_real_model_and_expected_actual_diff(
     with qtbot.waitSignal(window.dynamic_validation_finished, timeout=3000):
         panel.run_user_button.click()
 
-    assert panel.status_label.text() == "mismatch"
+    assert panel.status_label.text() == "不匹配"
     assert panel.result_table.item(0, 0).text() == "gui_user_case"
     assert json.loads(panel.result_table.item(0, 6).text()) == [
         {"actual": "Root.A", "expected": "Root.Wrong", "path": "state"}

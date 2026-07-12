@@ -216,7 +216,7 @@ class DiagnosticsPanel(QtWidgets.QWidget):
             "source: {}".format(item.source_kind.value),
             "message: {}".format(self._display(item.message)),
             "source_uri: {}".format(self._display(item.source_uri)),
-            "revision: {}".format(item.source_revision),
+            "版本：{}".format(item.source_revision),
             "provenance: {}".format(item.provenance),
         ]
         if item.severity is not None:

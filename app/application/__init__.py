@@ -31,6 +31,16 @@ from .formulas import (
     FormulaValidationStatus,
 )
 from .export import EXPORT_KINDS, ExportResult, ExportService
+from .graph_render import (
+    GRAPH_ENGINE,
+    GraphRenderError,
+    GraphRenderResult,
+    GraphRenderService,
+    GraphTransition,
+    RendererExecution,
+    normalize_plantuml_source,
+    validate_svg_semantics,
+)
 from .generation import (
     GeneratedFile,
     GenerationResult,
@@ -46,6 +56,7 @@ from .dynamic_validation import (
 )
 from .simulation import (
     SimulationCycleResult,
+    SimulationRunControl,
     SimulationRunResult,
     SimulationService,
     SimulationSession,
@@ -91,6 +102,12 @@ __all__ = [
     "FormulaValidationResult",
     "FormulaValidationService",
     "FormulaValidationStatus",
+    "GRAPH_ENGINE",
+    "GraphRenderError",
+    "GraphRenderResult",
+    "GraphRenderService",
+    "GraphTransition",
+    "RendererExecution",
     "GeneratedFile",
     "GenerationResult",
     "GenerationService",
@@ -99,6 +116,7 @@ __all__ = [
     "InvalidEventNameError",
     "PathRedactor",
     "SimulationCycleResult",
+    "SimulationRunControl",
     "SimulationRunResult",
     "SimulationService",
     "SimulationSession",
@@ -113,4 +131,6 @@ __all__ = [
     "TextEdit",
     "TextTransactionCommand",
     "SuggestedFix",
+    "normalize_plantuml_source",
+    "validate_svg_semantics",
 ]

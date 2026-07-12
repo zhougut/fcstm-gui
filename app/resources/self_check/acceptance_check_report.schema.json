@@ -10,13 +10,115 @@
     "viewport": {"pattern": "^[0-9]+x[0-9]+$"},
     "results": {
       "type": "array",
+      "minItems": 140,
       "items": {
         "type": "object",
-        "required": ["name", "status", "duration_ms", "detail"],
-        "properties": {"status": {"enum": ["passed", "failed"]}}
+        "required": ["name", "status", "duration_ms", "detail", "source_revision", "dependency_fingerprint", "error_chain", "evidence", "artifacts", "artifact_inventory", "isolation"],
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "status": {"enum": ["passed", "failed"]},
+          "duration_ms": {"type": "integer", "minimum": 0},
+          "detail": {"type": "string"},
+          "source_revision": {"type": ["integer", "null"], "minimum": 0},
+          "dependency_fingerprint": {
+            "type": ["string", "null"],
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "error_chain": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["type", "message"],
+              "properties": {
+                "type": {"type": "string", "minLength": 1},
+                "message": {"type": "string"}
+              }
+            }
+          },
+          "evidence": {"type": "object"},
+          "artifacts": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": ["path", "size", "sha256"],
+              "properties": {
+                "path": {"type": "string", "minLength": 1},
+                "size": {"type": "integer", "minimum": 1},
+                "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+              }
+            }
+          },
+          "artifact_inventory": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": ["path", "size", "sha256"],
+              "properties": {
+                "path": {"type": "string", "minLength": 1},
+                "size": {"type": "integer", "minimum": 1},
+                "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+              }
+            }
+          },
+          "isolation": {
+            "type": "object",
+            "required": ["strategy", "case_index"],
+            "properties": {
+              "strategy": {"const": "fresh-window"},
+              "case_index": {"type": "integer", "minimum": 1}
+            }
+          }
+        }
       }
     },
-    "geometry": {"type": "object"},
+    "geometry": {
+      "type": "object",
+      "required": ["viewport", "font_family", "font_point_size", "active_workspaces", "buttons", "overlap_exemptions", "focus_chain_exemptions"],
+      "properties": {
+        "viewport": {"pattern": "^[0-9]+x[0-9]+$"},
+        "font_family": {"type": "string", "minLength": 1},
+        "font_point_size": {"type": "integer", "minimum": 1},
+        "active_workspaces": {
+          "type": "array",
+          "minItems": 6,
+          "items": {
+            "type": "object",
+            "required": ["shortcut", "page", "focus_after", "visible_to_window", "contained_by_window", "rect", "focus_rect", "hidden_pages_visible", "current_tab_rect", "focus_chain", "scroll_areas", "headers", "current_items", "overlaps"],
+            "properties": {
+              "shortcut": {"type": "string", "minLength": 1},
+              "page": {"type": "string", "minLength": 1},
+              "focus_after": {"type": "string", "minLength": 1},
+              "visible_to_window": {"const": true},
+              "contained_by_window": {"const": true},
+              "rect": {
+                "type": "array",
+                "minItems": 4,
+                "maxItems": 4,
+                "items": {"type": "integer"}
+              },
+              "focus_rect": {
+                "type": "array",
+                "minItems": 4,
+                "maxItems": 4,
+                "items": {"type": "integer"}
+              },
+              "hidden_pages_visible": {"type": "array", "maxItems": 0}
+              ,"current_tab_rect": {"type": "array", "minItems": 4, "maxItems": 4, "items": {"type": "integer"}}
+              ,"focus_chain": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}
+              ,"scroll_areas": {"type": "array"}
+              ,"headers": {"type": "array"}
+              ,"current_items": {"type": "array"}
+              ,"overlaps": {"type": "array", "maxItems": 0}
+            }
+          }
+        },
+        "buttons": {"type": "array", "minItems": 1},
+        "overlap_exemptions": {"type": "array", "maxItems": 0},
+        "focus_chain_exemptions": {"type": "array"}
+      }
+    },
     "artifacts": {"type": "array"}
   }
 }

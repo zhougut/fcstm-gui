@@ -575,6 +575,19 @@ class TaskCenter:
         self._save_candidate(candidate)
         return len(removed_ids)
 
+    def clear_completed(self):
+        removed_ids = {
+            record.task_id
+            for record in self._records
+            if record.boundary is TaskBoundary.EXPLICIT
+            and record.status is TaskStatus.SUCCESS
+        }
+        candidate = [
+            record for record in self._records if record.task_id not in removed_ids
+        ]
+        self._save_candidate(candidate)
+        return len(removed_ids)
+
     def clear_all_persistent(self):
         removed = sum(
             record.boundary is TaskBoundary.EXPLICIT

@@ -6,14 +6,18 @@ import json
 import os
 import sys
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Optional
 
-from pyfcstm.entry.visualize import render_plantuml_diagram
 from pyfcstm.model import load_state_machine_from_text
 
+from app.application.graph_render import (
+    GraphRenderResult,
+    GraphRenderService,
+    normalize_plantuml_source,
+)
 from app.utils.export_to_excel import export_statechart_to_excel
 from app.utils.export_to_word import export_statechart_to_word
 
@@ -36,6 +40,7 @@ class ExportResult:
     kind: str
     path: str
     size: int
+    graph: Optional[GraphRenderResult] = None
 
 
 class ExportService(object):
@@ -65,7 +70,7 @@ class ExportService(object):
         temporary = Path(temporary_name)
         try:
             _raise_if_cancelled(cancel_token)
-            self._write(
+            graph_result = self._write(
                 kind,
                 temporary,
                 source_text,
@@ -74,11 +79,19 @@ class ExportService(object):
                 inspect_report,
                 dynamic_report_json,
                 plantuml_jar,
+                cancel_token,
             )
             _validate_output(kind, temporary)
             _raise_if_cancelled(cancel_token)
             os.replace(str(temporary), str(target))
-            return ExportResult(kind=kind, path=str(target), size=target.stat().st_size)
+            if graph_result is not None:
+                graph_result = replace(graph_result, path=str(target))
+            return ExportResult(
+                kind=kind,
+                path=str(target),
+                size=target.stat().st_size,
+                graph=graph_result,
+            )
         finally:
             try:
                 temporary.unlink()
@@ -95,18 +108,22 @@ class ExportService(object):
         inspect_report,
         dynamic_report_json,
         plantuml_jar,
+        cancel_token,
     ):
         if kind == "fcstm":
             temporary.write_text(source_text, encoding="utf-8")
         elif kind == "plantuml":
-            temporary.write_text(model.to_plantuml(), encoding="utf-8")
+            temporary.write_text(
+                normalize_plantuml_source(model.to_plantuml()), encoding="utf-8"
+            )
         elif kind in ("png", "svg", "pdf"):
-            render_plantuml_diagram(
+            return GraphRenderService().render(
                 model.to_plantuml(),
                 temporary,
                 kind,
-                "local",
                 plantuml_jar=plantuml_jar or _plantuml_jar_path(),
+                overwrite=True,
+                cancel_token=cancel_token,
             )
         elif kind == "docx":
             if state_manager is None:
@@ -134,6 +151,7 @@ class ExportService(object):
                 raise ValueError("dynamic JSON export requires a completed report")
             json.loads(dynamic_report_json)
             temporary.write_text(dynamic_report_json, encoding="utf-8")
+        return None
 
 
 def _plantuml_jar_path():

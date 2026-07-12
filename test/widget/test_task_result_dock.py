@@ -78,7 +78,7 @@ def test_result_dock_filters_selects_copies_and_exports_redacted_detail(
 
     assert dock.table.rowCount() == 1
     assert dock.selected_record.task_id == "failed"
-    assert dock.table.horizontalHeaderItem(2).text() == "revision"
+    assert dock.table.horizontalHeaderItem(2).text() == "版本"
     assert dock.table.item(0, 0).text() == "失败"
     assert dock.table.item(0, 2).text() == "r1"
     assert str(workspace) not in dock.table.item(0, 3).text()
@@ -168,7 +168,8 @@ def test_each_result_row_has_stable_accessible_context_action(qtbot, tmp_path):
     dock.show()
 
     assert dock.table.horizontalHeaderItem(5).text() == "操作"
-    assert dock.table.item(2, 1).toolTip() == dock.table.item(2, 1).text()
+    assert dock.table.item(2, 1).text() == "文档加载"
+    assert "document-load" in dock.table.item(2, 1).toolTip()
     assert dock.table.item(2, 4).toolTip() == dock.table.item(2, 4).text()
     queued_button = dock.table.cellWidget(0, 5)
     running_button = dock.table.cellWidget(1, 5)
@@ -276,7 +277,7 @@ def test_restored_placeholder_retry_descriptor_is_not_retryable(qtbot, tmp_path)
     assert not dock.retry_button.isEnabled()
 
 
-def test_result_dock_exports_and_has_two_confirmed_clear_operations(
+def test_result_dock_exports_and_has_three_confirmed_clear_operations(
     monkeypatch, qtbot, tmp_path
 ):
     center = TaskCenter(
@@ -312,6 +313,11 @@ def test_result_dock_exports_and_has_two_confirmed_clear_operations(
     )
     assert dock.clear_filtered() == 1
     assert [record.task_id for record in center.records] == ["success"]
+    assert dock.clear_completed() == 1
+    assert center.records == ()
+
+    center.add(_record("cancelled", TaskStatus.CANCELLED, "cancelled"))
+    dock.refresh()
     assert dock.clear_all() == 1
     assert center.records == ()
 

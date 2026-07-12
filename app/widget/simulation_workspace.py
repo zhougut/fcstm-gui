@@ -11,6 +11,7 @@ class SimulationWorkspace(QtWidgets.QWidget):
     initialize_requested = QtCore.pyqtSignal(object)
     cycle_requested = QtCore.pyqtSignal(object)
     run_requested = QtCore.pyqtSignal(object)
+    pause_requested = QtCore.pyqtSignal()
     reset_requested = QtCore.pyqtSignal()
     cancel_requested = QtCore.pyqtSignal()
 
@@ -19,6 +20,8 @@ class SimulationWorkspace(QtWidgets.QWidget):
         self.setObjectName("ordinary_simulation_panel")
         self._ready = False
         self._busy = False
+        self._pausable = False
+        self._paused = False
         self._build_ui()
         self._connect_signals()
         self.set_document_available(False)
@@ -70,12 +73,14 @@ class SimulationWorkspace(QtWidgets.QWidget):
         self.initialize_button = self._button("初始化", "simulation_initialize_button")
         self.cycle_button = self._button("单步", "simulation_cycle_button")
         self.run_button = self._button("连续运行", "simulation_run_button")
+        self.pause_button = self._button("暂停", "simulation_pause_button")
         self.reset_button = self._button("重置", "simulation_reset_button")
         self.cancel_button = self._button("停止", "simulation_cancel_button")
         for button in (
             self.initialize_button,
             self.cycle_button,
             self.run_button,
+            self.pause_button,
             self.reset_button,
             self.cancel_button,
         ):
@@ -122,6 +127,7 @@ class SimulationWorkspace(QtWidgets.QWidget):
                 {"max_cycles": self.cycle_count.value(), "events": self.event_values()}
             )
         )
+        self.pause_button.clicked.connect(self.pause_requested)
         self.reset_button.clicked.connect(self.reset_requested)
         self.cancel_button.clicked.connect(self.cancel_requested)
 
@@ -146,15 +152,18 @@ class SimulationWorkspace(QtWidgets.QWidget):
         if available:
             short_fingerprint = (fingerprint or "")[:12] or "-"
             self.stamp_label.setText(
-                "revision {} | dependency {}".format(revision, short_fingerprint)
+                "版本 {} | 依赖 {}".format(revision, short_fingerprint)
             )
         else:
-            self.stamp_label.setText("当前 revision 无有效快照")
+            self.stamp_label.setText("当前版本无有效快照")
             self._ready = False
         self._update_actions()
 
-    def set_busy(self, busy, status=None):
+    def set_busy(self, busy, status=None, pausable=False):
         self._busy = bool(busy)
+        self._pausable = bool(busy and pausable)
+        if busy:
+            self._paused = False
         if status:
             self.status_label.setText(status)
         self._update_actions()
@@ -162,7 +171,9 @@ class SimulationWorkspace(QtWidgets.QWidget):
     def set_initialized(self, snapshot):
         self._ready = True
         self._busy = False
-        self.status_label.setText("ready")
+        self._pausable = False
+        self._paused = False
+        self.status_label.setText("就绪")
         self.transcript_table.setRowCount(0)
         self.present_snapshot(snapshot)
         self._update_actions()
@@ -200,36 +211,58 @@ class SimulationWorkspace(QtWidgets.QWidget):
                 self.transcript_table.setItem(row, column, item)
             self.present_snapshot(cycle.snapshot)
         self._busy = False
+        self._pausable = False
+        self._paused = False
         if cycles:
             last = cycles[-1]
             if last.error is not None:
-                self.status_label.setText("failed")
+                self.status_label.setText("失败")
             elif last.snapshot.ended:
-                self.status_label.setText("ended")
+                self.status_label.setText("已结束")
             else:
-                self.status_label.setText("ready")
+                self.status_label.setText("就绪")
+        self._update_actions()
+
+    def show_pause_requested(self):
+        self._pausable = False
+        self.status_label.setText("正在暂停")
+        self._update_actions()
+
+    def show_paused(self):
+        self._busy = False
+        self._pausable = False
+        self._paused = True
+        self.status_label.setText("已暂停")
         self._update_actions()
 
     def show_cancelled(self):
         self._busy = False
-        self.status_label.setText("cancelled，已保留完成的 cycle")
+        self._pausable = False
+        self._paused = False
+        self.status_label.setText("已取消，已保留完成的周期")
         self._update_actions()
 
     def show_error(self, message):
         self._busy = False
-        self.status_label.setText("failed: " + str(message))
+        self._pausable = False
+        self._paused = False
+        self.status_label.setText("失败：" + str(message))
         self.status_label.setToolTip(str(message))
         self._update_actions()
 
     def invalidate(self):
         self._ready = False
         self._busy = False
-        self.status_label.setText("stale，需要重新初始化")
+        self._pausable = False
+        self._paused = False
+        self.status_label.setText("已失效，需要重新初始化")
         self._update_actions()
 
     def _update_actions(self):
         self.initialize_button.setEnabled(self._document_available and not self._busy)
         self.cycle_button.setEnabled(self._ready and not self._busy)
         self.run_button.setEnabled(self._ready and not self._busy)
+        self.run_button.setText("继续运行" if self._paused else "连续运行")
+        self.pause_button.setEnabled(self._busy and self._pausable)
         self.reset_button.setEnabled(self._ready and not self._busy)
         self.cancel_button.setEnabled(self._busy)

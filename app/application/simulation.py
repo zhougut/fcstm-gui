@@ -2,6 +2,8 @@
 
 from __future__ import unicode_literals
 
+import threading
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
@@ -42,6 +44,28 @@ class SimulationCycleResult:
 class SimulationRunResult:
     cycles: Tuple[SimulationCycleResult, ...]
     cancelled: bool
+    paused: bool = False
+    stale: bool = False
+
+
+class SimulationRunControl:
+    """Thread-safe cooperative pause/stale requests checked at cycle boundaries."""
+
+    def __init__(self) -> None:
+        self._pause_event = threading.Event()
+        self._stale_event = threading.Event()
+
+    def request_pause(self) -> None:
+        self._pause_event.set()
+
+    def request_stale(self) -> None:
+        self._stale_event.set()
+
+    def is_pause_requested(self) -> bool:
+        return self._pause_event.is_set()
+
+    def is_stale_requested(self) -> bool:
+        return self._stale_event.is_set()
 
 
 @dataclass
@@ -146,19 +170,36 @@ class SimulationService:
         max_cycles: int,
         events_per_cycle: Sequence[Any] = (),
         cancel_token: Optional[Any] = None,
+        run_control: Optional[Any] = None,
     ) -> SimulationRunResult:
         cycles = []
         cancelled = False
+        paused = False
+        stale = False
         for index in range(max(0, max_cycles)):
+            if _control_requested(run_control, "is_stale_requested"):
+                stale = True
+                break
             if _is_cancelled(cancel_token):
                 cancelled = True
+                break
+            if _control_requested(run_control, "is_pause_requested"):
+                paused = True
                 break
             events = events_per_cycle[index] if index < len(events_per_cycle) else None
             result = self.cycle(session, events=events)
             cycles.append(result)
             if result.error is not None or result.snapshot.ended:
                 break
-        return SimulationRunResult(cycles=tuple(cycles), cancelled=cancelled)
+            # Long runs need a real scheduling window for GUI pause/cancel.
+            if (index + 1) % 32 == 0:
+                time.sleep(0.001)
+        return SimulationRunResult(
+            cycles=tuple(cycles),
+            cancelled=cancelled,
+            paused=paused,
+            stale=stale,
+        )
 
     def reset(self, session: SimulationSession) -> SimulationSnapshot:
         initial_vars = (
@@ -226,3 +267,12 @@ def _is_cancelled(cancel_token: Optional[Any]) -> bool:
     if callable(checker):
         return bool(checker())
     return bool(checker)
+
+
+def _control_requested(control: Optional[Any], method_name: str) -> bool:
+    if control is None:
+        return False
+    checker = getattr(control, method_name, None)
+    if not callable(checker):
+        return False
+    return bool(checker())

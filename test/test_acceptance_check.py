@@ -1,5 +1,6 @@
 from __future__ import unicode_literals
 
+import hashlib
 import json
 
 from app.acceptance_check import _parse_viewport, run_acceptance_check
@@ -29,8 +30,232 @@ def test_full_gui_acceptance_writes_report(qtbot, tmp_path, monkeypatch):
     assert report["schema"] == "fcstm-gui.acceptance-check-report"
     assert report["version"] == 1
     assert report["status"] == "passed"
-    assert report["counts"] == {"total": 11, "passed": 11, "failed": 0}
-    assert len(report["artifacts"]) >= 8
+    assert report["counts"] == {"total": 140, "passed": 140, "failed": 0}
+    names = [item["name"] for item in report["results"]]
+    assert len(names) == len(set(names))
+    assert hashlib.sha256(
+        ("\n".join(names) + "\n").encode("utf-8")
+    ).hexdigest() == "3f6b76bfb88f345bd0b1f8492c72406511580e8ea3f2afc68d0aaedfb2ecb1ea"
+    for required in (
+        "document.open",
+        "document.recent-reopen",
+        "document.cancel-load",
+        "document.failed-load-preserves-session",
+        "dirty.save",
+        "dirty.discard",
+        "dirty.cancel",
+        "source.edit",
+        "source.undo",
+        "source.redo",
+        "source.save",
+        "source.fresh-reload",
+        "imported.readonly",
+        "imported.open-source",
+        "rename.simple",
+        "rename.composite",
+        "rename.unicode-crlf",
+        "diagnostics.syntax",
+        "diagnostics.assembly",
+        "diagnostics.inspect",
+        "diagnostics.locate",
+        "diagnostics.filter-search",
+        "diagnostics.conflict-warning",
+        "diagnostics.suggested-fix",
+        "keyboard.workspace",
+        "graph.refresh",
+        "graph.fit",
+        "graph.zoom",
+        "graph.selection",
+        "graph.reset",
+        "simulation.initialize",
+        "simulation.step",
+        "simulation.run",
+        "simulation.pause",
+        "simulation.continue",
+        "simulation.reset",
+        "simulation.stop",
+        "terminology.dynamic-not-formal",
+        "geometry.active-workspaces",
+    ):
+        assert required in names
+    assert {
+        "formula.{}.{}".format(kind, validity)
+        for kind in ("guard", "effect", "lifecycle", "numeric")
+        for validity in ("valid", "invalid")
+    } <= set(names)
+    assert {
+        "keyboard.model",
+        "keyboard.inspect",
+        "keyboard.generation",
+        "keyboard.templates",
+        "keyboard.graph",
+        "keyboard.simulation",
+        "keyboard.syntax",
+        "keyboard.formula.guard",
+        "keyboard.formula.effect",
+        "keyboard.formula.lifecycle",
+        "keyboard.formula.numeric",
+        "graph.drag",
+    } <= set(names)
+    assert {
+        "model.{}.{}".format(entity, operation)
+        for entity in (
+            "state",
+            "variable",
+            "event",
+            "transition",
+            "guard",
+            "effect",
+            "lifecycle",
+        )
+        for operation in ("add", "edit", "delete")
+    } <= set(names)
+    assert {
+        "cancel.load",
+        "cancel.simulation",
+        "cancel.dynamic",
+        "cancel.graph",
+        "cancel.generation",
+        "cancel.export",
+    } <= set(names)
+    assert {
+        "stale.graph",
+        "stale.simulation",
+        "stale.dynamic",
+        "stale.generation",
+        "stale.export",
+    } <= set(names)
+    assert "formula.stale" in names
+    assert {
+        "generation.python",
+        "generation.c",
+        "generation.c-poll",
+        "generation.cpp",
+        "generation.cpp-poll",
+        "generation.custom",
+        "generation.overwrite",
+    } <= set(names)
+    assert {
+        "export.dsl",
+        "export.word",
+        "export.excel",
+        "export.plantuml",
+        "export.png",
+        "export.svg",
+        "export.pdf",
+        "export.inspect-json",
+        "export.dynamic-json",
+    } <= set(names)
+    assert len([name for name in names if name.startswith("dynamic.case.")]) == 4
+    assert {"dynamic.mutation", "dynamic.recover", "dynamic.user", "dynamic.export"} <= set(names)
+    assert {
+        "graph.export.plantuml",
+        "graph.export.png",
+        "graph.export.svg",
+        "graph.export.pdf",
+    } <= set(names)
+    assert {
+        "tasks.copy",
+        "tasks.filter",
+        "tasks.export",
+        "tasks.clear-filtered",
+        "tasks.clear-completed",
+        "tasks.clear-all",
+        "tasks.retry",
+        "tasks.cancel",
+        "tasks.artifact",
+        "tasks.redaction",
+    } <= set(names)
+    assert {
+        "tasks.registry." + kind
+        for kind in ("load", "inspect", "graph", "simulation", "dynamic", "generation", "export")
+    } <= set(names)
+    assert {
+        "tasks.transient.document-validation",
+        "tasks.transient.formula-validation",
+    } <= set(names)
+    assert all(item["artifacts"] for item in report["results"])
+    assert all(item["artifact_inventory"] == item["artifacts"] for item in report["results"])
+    assert all(isinstance(item["evidence"], dict) for item in report["results"])
+    assert all(item["source_revision"] is not None for item in report["results"])
+    assert all(item["dependency_fingerprint"] for item in report["results"])
+    assert all(item["error_chain"] == [] for item in report["results"])
+    assert [item["isolation"]["case_index"] for item in report["results"]] == list(
+        range(1, 141)
+    )
+    assert all(
+        item["isolation"]["strategy"] == "fresh-window"
+        for item in report["results"]
+    )
+    assert len(report["artifacts"]) >= len(report["results"])
     assert report["geometry"]["viewport"] == "1280x720"
     assert report["geometry"]["font_family"] == "Noto Sans CJK SC"
     assert report["geometry"]["font_point_size"] == 10
+    workspaces = report["geometry"]["active_workspaces"]
+    assert [item["shortcut"] for item in workspaces] == [
+        "Ctrl+1",
+        "Ctrl+2",
+        "Ctrl+3",
+        "Ctrl+4",
+        "Ctrl+5",
+        "Ctrl+6",
+    ]
+    assert all(item["visible_to_window"] for item in workspaces)
+    assert all(item["contained_by_window"] for item in workspaces)
+    assert all(not item["overlaps"] for item in workspaces)
+    assert all(item["current_tab_rect"][2:] > [0, 0] for item in workspaces)
+    assert all(item["focus_chain"] for item in workspaces)
+    assert report["geometry"]["overlap_exemptions"] == []
+
+
+def test_acceptance_schema_requires_item_evidence_and_artifacts():
+    from app import acceptance_check
+
+    schema_path = (
+        acceptance_check.Path(acceptance_check.__file__).resolve().parent
+        / "resources"
+        / "self_check"
+        / "acceptance_check_report.schema.json"
+    )
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    item_schema = schema["properties"]["results"]["items"]
+    assert set(item_schema["required"]) >= {
+        "name",
+        "status",
+        "duration_ms",
+        "detail",
+        "source_revision",
+        "dependency_fingerprint",
+        "error_chain",
+        "evidence",
+        "artifacts",
+        "artifact_inventory",
+        "isolation",
+    }
+    geometry_schema = schema["properties"]["geometry"]
+    assert set(geometry_schema["required"]) >= {
+        "viewport",
+        "font_family",
+        "font_point_size",
+        "active_workspaces",
+        "buttons",
+        "overlap_exemptions",
+        "focus_chain_exemptions",
+    }
+    workspace_schema = geometry_schema["properties"]["active_workspaces"]["items"]
+    assert set(workspace_schema["required"]) >= {
+        "shortcut",
+        "page",
+        "focus_after",
+        "visible_to_window",
+        "contained_by_window",
+        "rect",
+        "focus_rect",
+        "hidden_pages_visible",
+        "current_tab_rect",
+        "focus_chain",
+        "scroll_areas",
+        "headers",
+        "current_items",
+        "overlaps",
+    }

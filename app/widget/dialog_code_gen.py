@@ -12,6 +12,13 @@ class DialogCodeGen(QtWidgets.QDialog):
     cancel_requested = QtCore.pyqtSignal()
 
     LANGUAGE_LABELS = (("全部", ""), ("Python", "python"), ("C", "c"), ("C++", "cpp"))
+    TEMPLATE_COPY = {
+        "python": ("Python 运行模板", "生成可直接运行的 Python 状态机实现。"),
+        "c": ("C 运行模板", "生成 C 语言状态机核心、头文件和构建配置。"),
+        "c_poll": ("C 轮询模板", "生成带轮询入口的 C 运行时封装。"),
+        "cpp": ("C++ 运行模板", "生成 C++ 状态机实现、头文件和构建配置。"),
+        "cpp_poll": ("C++ 轮询模板", "生成复用 C 运行核心的 C++ 轮询封装。"),
+    }
 
     def __init__(self, parent, templates, state_manager=None, model=None):
         super().__init__(parent)
@@ -64,7 +71,7 @@ class DialogCodeGen(QtWidgets.QDialog):
         self.description_edit.setReadOnly(True)
         self.description_edit.setMaximumHeight(90)
         layout.addWidget(self.description_edit)
-        self.status_label = QtWidgets.QLabel("ready", self)
+        self.status_label = QtWidgets.QLabel("就绪", self)
         self.status_label.setObjectName("generation_status_label")
         layout.addWidget(self.status_label)
         self.progress_bar = QtWidgets.QProgressBar(self)
@@ -77,7 +84,15 @@ class DialogCodeGen(QtWidgets.QDialog):
         self.result_table.setObjectName("generation_result_table")
         self.result_table.setHorizontalHeaderLabels(["文件", "大小", "SHA-256"])
         self.result_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
-        self.result_table.horizontalHeader().setStretchLastSection(True)
+        self.result_table.horizontalHeader().setSectionResizeMode(
+            0, QtWidgets.QHeaderView.Stretch
+        )
+        self.result_table.horizontalHeader().setSectionResizeMode(
+            1, QtWidgets.QHeaderView.ResizeToContents
+        )
+        self.result_table.horizontalHeader().setSectionResizeMode(
+            2, QtWidgets.QHeaderView.ResizeToContents
+        )
         layout.addWidget(self.result_table, 1)
         buttons = QtWidgets.QHBoxLayout()
         self.open_directory_button = self._button("打开目录", "generation_open_directory_button")
@@ -101,7 +116,9 @@ class DialogCodeGen(QtWidgets.QDialog):
     def _connect_signals(self):
         self.language_combo.currentIndexChanged.connect(self._filter_templates)
         self.template_combo.currentIndexChanged.connect(self._show_template_info)
-        self.template_mode_combo.currentIndexChanged.connect(self._update_actions)
+        self.template_mode_combo.currentIndexChanged.connect(
+            self._update_template_mode
+        )
         self.custom_template_button.clicked.connect(self._choose_custom_template)
         self.output_button.clicked.connect(self._choose_output)
         self.generate_button.clicked.connect(self._request_generation)
@@ -116,7 +133,8 @@ class DialogCodeGen(QtWidgets.QDialog):
         self.template_combo.clear()
         for item in self.templates:
             if not language or item.language == language:
-                self.template_combo.addItem("{} ({})".format(item.title, item.name), item.name)
+                title = self.TEMPLATE_COPY.get(item.name, (item.title, ""))[0]
+                self.template_combo.addItem("{} ({})".format(title, item.name), item.name)
         index = self.template_combo.findData(current)
         if index >= 0:
             self.template_combo.setCurrentIndex(index)
@@ -126,9 +144,24 @@ class DialogCodeGen(QtWidgets.QDialog):
     def _show_template_info(self):
         name = self.template_combo.currentData()
         descriptor = next((item for item in self.templates if item.name == name), None)
+        copy = self.TEMPLATE_COPY.get(name)
         self.description_edit.setPlainText(
-            "" if descriptor is None else "{}\n{}".format(descriptor.title, descriptor.description)
+            ""
+            if descriptor is None
+            else "{}\n{}".format(
+                copy[0] if copy else descriptor.title,
+                copy[1] if copy else descriptor.description,
+            )
         )
+
+    def _update_template_mode(self):
+        if self.template_mode_combo.currentIndex() == 1:
+            self.description_edit.setPlainText(
+                "自定义模板\n使用所选目录中的 config.yaml 和 Jinja2 模板生成代码。"
+            )
+        else:
+            self._show_template_info()
+        self._update_actions()
 
     def _choose_custom_template(self):
         path = QtWidgets.QFileDialog.getExistingDirectory(self, "选择自定义模板目录")
@@ -187,9 +220,11 @@ class DialogCodeGen(QtWidgets.QDialog):
         for item in result.files:
             row = self.result_table.rowCount()
             self.result_table.insertRow(row)
-            for column, value in enumerate((item.relative_path, item.size, item.sha256)):
+            values = (item.relative_path, item.size, _digest_summary(item.sha256))
+            for column, value in enumerate(values):
                 cell = QtWidgets.QTableWidgetItem(str(value))
-                cell.setToolTip(str(value))
+                full_value = item.sha256 if column == 2 else value
+                cell.setToolTip(str(full_value))
                 self.result_table.setItem(row, column, cell)
         self._update_actions()
 
@@ -197,7 +232,7 @@ class DialogCodeGen(QtWidgets.QDialog):
         self._busy = False
         self.progress_bar.setRange(0, 1)
         self.progress_bar.setValue(0)
-        self.status_label.setText("failed: " + str(message))
+        self.status_label.setText("失败：" + str(message))
         self.status_label.setToolTip(str(message))
         self._update_actions()
 
@@ -205,7 +240,7 @@ class DialogCodeGen(QtWidgets.QDialog):
         self._busy = False
         self.progress_bar.setRange(0, 1)
         self.progress_bar.setValue(0)
-        self.status_label.setText("cancelled，既有输出未修改")
+        self.status_label.setText("已取消，既有输出未修改")
         self._update_actions()
 
     def _open_output_directory(self):
@@ -240,3 +275,10 @@ class DialogCodeGen(QtWidgets.QDialog):
             event.ignore()
             return
         super().closeEvent(event)
+
+
+def _digest_summary(value):
+    value = str(value)
+    if len(value) <= 20:
+        return value
+    return value[:12] + "..." + value[-8:]

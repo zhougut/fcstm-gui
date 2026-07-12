@@ -1,6 +1,6 @@
 from __future__ import unicode_literals
 
-from app.application.simulation import SimulationService
+from app.application.simulation import SimulationRunControl, SimulationService
 from pyfcstm.simulate import SimulationRuntime
 
 
@@ -119,6 +119,140 @@ def test_run_many_checks_cancel_token_only_between_cycles():
     assert run.cycles[-1].snapshot.cycle == 2
     assert run.cycles[-1].snapshot.state_path == ("Root", "A")
     assert run.cycles[-1].snapshot.vars == {"x": 4, "y": 0}
+
+
+class BoundaryRunControl(object):
+    def __init__(self, pause_on_call=None, stale_on_call=None):
+        self.pause_on_call = pause_on_call
+        self.stale_on_call = stale_on_call
+        self.pause_calls = 0
+        self.stale_calls = 0
+
+    def is_pause_requested(self):
+        self.pause_calls += 1
+        return (
+            self.pause_on_call is not None
+            and self.pause_calls >= self.pause_on_call
+        )
+
+    def is_stale_requested(self):
+        self.stale_calls += 1
+        return (
+            self.stale_on_call is not None
+            and self.stale_calls >= self.stale_on_call
+        )
+
+
+def test_run_pauses_at_cycle_boundary_and_same_runtime_can_continue():
+    service = SimulationService()
+    session = service.start(
+        BASIC_SOURCE,
+        source_uri="memory://pause",
+        source_revision=8,
+        dependency_fingerprint="deps-pause",
+    )
+    control = BoundaryRunControl(pause_on_call=3)
+
+    paused = service.run(session, max_cycles=5, run_control=control)
+
+    assert paused.paused is True
+    assert paused.cancelled is False
+    assert paused.stale is False
+    assert len(paused.cycles) == 2
+    runtime = session.runtime
+    continued = service.run(session, max_cycles=2)
+    assert session.runtime is runtime
+    assert len(continued.cycles) == 2
+    assert continued.cycles[-1].snapshot.cycle == 4
+
+
+def test_run_stale_wins_over_pause_at_same_cycle_boundary():
+    service = SimulationService()
+    session = service.start(
+        BASIC_SOURCE,
+        source_uri="memory://stale",
+        source_revision=9,
+        dependency_fingerprint="deps-stale",
+    )
+    control = BoundaryRunControl(pause_on_call=2, stale_on_call=2)
+
+    result = service.run(session, max_cycles=5, run_control=control)
+
+    assert result.stale is True
+    assert result.paused is False
+    assert result.cancelled is False
+    assert len(result.cycles) == 1
+
+
+def test_run_stops_after_terminal_cycle_and_accounts_iterable_events():
+    service = SimulationService()
+    session = service.start(
+        BASIC_SOURCE,
+        source_uri="memory://terminal-run",
+        source_revision=10,
+        dependency_fingerprint=None,
+        initial_state=("Root", "C"),
+        initial_vars={"x": 2, "y": 0},
+    )
+
+    result = service.run(
+        session,
+        max_cycles=5,
+        events_per_cycle=(("Stop",),),
+    )
+
+    assert len(result.cycles) == 1
+    assert result.cycles[0].input_events == ("Root.C.Stop",)
+    assert result.cycles[0].snapshot.ended is True
+
+
+def test_run_accepts_cancelled_method_or_boolean_property_tokens():
+    service = SimulationService()
+
+    class CallableToken(object):
+        def cancelled(self):
+            return True
+
+    class BooleanToken(object):
+        cancelled = True
+
+    for token in (CallableToken(), BooleanToken()):
+        session = service.start(
+            BASIC_SOURCE,
+            source_uri="memory://cancel-shape",
+            source_revision=11,
+            dependency_fingerprint=None,
+        )
+        result = service.run(session, max_cycles=1, cancel_token=token)
+        assert result.cancelled is True
+        assert result.cycles == ()
+
+
+def test_long_run_crosses_cooperative_gui_scheduling_boundary():
+    service = SimulationService()
+    session = service.start(
+        BASIC_SOURCE,
+        source_uri="memory://cooperative-yield",
+        source_revision=12,
+        dependency_fingerprint=None,
+    )
+
+    result = service.run(session, max_cycles=33)
+
+    assert len(result.cycles) == 33
+    assert result.cycles[-1].snapshot.cycle == 33
+
+
+def test_thread_safe_run_control_records_pause_and_stale_requests():
+    control = SimulationRunControl()
+    assert control.is_pause_requested() is False
+    assert control.is_stale_requested() is False
+
+    control.request_pause()
+    control.request_stale()
+
+    assert control.is_pause_requested() is True
+    assert control.is_stale_requested() is True
 
 
 def test_reset_creates_new_runtime_and_restores_initial_configuration():

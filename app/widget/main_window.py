@@ -2,6 +2,7 @@ from dataclasses import dataclass, replace
 from typing import Optional
 import json
 import os
+import sys
 import tempfile
 import time
 import uuid
@@ -39,7 +40,7 @@ from app.application.diagnostics import (
 from app.application.dynamic_validation import DynamicValidationService
 from app.application.export import ExportService
 from app.application.generation import GenerationService
-from app.application.simulation import SimulationService
+from app.application.simulation import SimulationRunControl, SimulationService
 from app.application.task_runner import (
     TaskResult,
     TaskRunner,
@@ -74,6 +75,7 @@ from app.utils.ui_to_dsl import state_manager_to_dsl
 from .dialog_show_error import DialogShowError
 from .dialog_code_gen import DialogCodeGen
 from .dialog_export import DialogExport
+from .dialog_numeric_formula import DialogNumericFormula
 from .dialog_add_lifecycle import DialogAddLifecycle
 from .dialog_add_transition import DialogAddTransition
 from .task_result_dock import TaskResultDock
@@ -170,6 +172,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         QMainWindow.__init__(self)
         self.application_font_family = install_application_font()
         self.setupUi(self)
+        self.property_source_label.setTextFormat(Qt.PlainText)
         self.workspace_tabs = self.workbench_tabs
         self.frame_all_state = self.model_explorer_panel
         self.at_page_initial = True
@@ -184,6 +187,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self.generation_service = GenerationService()
         self.export_service = ExportService()
         self._simulation_session = None
+        self._simulation_run_control = None
         self._workspace_task_actions = {}
         self.document_session = None
         self.settings = settings if settings is not None else QtCore.QSettings(
@@ -250,6 +254,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self._init_button_transition()
         self._init_keyboard_navigation()
         self._finalize_button_accessibility()
+        self._update_document_actions()
         '''
         self._init_button_save_state()
         '''
@@ -292,20 +297,51 @@ class AppMainWindow(QMainWindow, UIMainWindow):
                 button.setToolTip(button.accessibleName())
 
     def _init_menu_bar(self):
-        """初始化菜单栏"""
-        # 文件菜单
+        """Build the product menu information architecture."""
+        self.menuBar().clear()
+        self.menu_file.clear()
+        self.menu_file.setTitle("文件")
+        self.menu_file.setObjectName("menu_file")
+        self.menu_edit = QtWidgets.QMenu("编辑", self)
+        self.menu_edit.setObjectName("menu_edit")
+        self.menu_model = QtWidgets.QMenu("模型", self)
+        self.menu_model.setObjectName("menu_model")
+        self.menu_inspect = QtWidgets.QMenu("检查", self)
+        self.menu_inspect.setObjectName("menu_inspect")
+        self.menu_simulation = QtWidgets.QMenu("仿真", self)
+        self.menu_simulation.setObjectName("menu_simulation")
+        self.menu_generation = QtWidgets.QMenu("生成", self)
+        self.menu_generation.setObjectName("menu_generation")
+        self.menu_export = QtWidgets.QMenu("导出", self)
+        self.menu_export.setObjectName("menu_export")
+        self.menu_view = QtWidgets.QMenu("视图", self)
+        self.menu_view.setObjectName("menu_view")
+        for menu in (
+            self.menu_file,
+            self.menu_edit,
+            self.menu_model,
+            self.menu_inspect,
+            self.menu_simulation,
+            self.menu_generation,
+            self.menu_export,
+            self.menu_view,
+        ):
+            self.menuBar().addMenu(menu)
+
+        self.action_import_state_machine.setText("打开")
         self.menu_file.addAction(self.action_import_state_machine)
         self.action_import_state_machine.setShortcut(QtGui.QKeySequence.Open)
         self.action_save_state_machine = QtWidgets.QAction("保存", self)
+        self.action_save_state_machine.setObjectName("action_save_state_machine")
         self.action_save_state_machine.setShortcut(QtGui.QKeySequence.Save)
         self.menu_file.addAction(self.action_save_state_machine)
-        self.menu_file.addAction(self.action_export_state_machine)
-        self.action_unified_export = QtWidgets.QAction("统一导出", self)
-        self.action_unified_export.setObjectName("action_unified_export")
-        self.action_unified_export.setShortcut("Ctrl+Shift+X")
-        self.menu_file.addAction(self.action_unified_export)
+        self.menu_recent_files = QtWidgets.QMenu("最近文件", self)
+        self.menu_recent_files.setObjectName("menu_recent_files")
+        self.action_clear_recent_files = QtWidgets.QAction("清空最近文件", self)
+        self.action_clear_recent_files.setObjectName("action_clear_recent_files")
+        self.action_clear_recent_files.triggered.connect(self._clear_recent_files)
+        self.menu_file.insertMenu(self.action_save_state_machine, self.menu_recent_files)
 
-        self.menu_edit = self.menuBar().addMenu("编辑")
         self.action_undo = QtWidgets.QAction("撤销", self)
         self.action_undo.setObjectName("action_undo")
         self.action_undo.setShortcut(QtGui.QKeySequence.Undo)
@@ -315,22 +351,68 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self.action_find = QtWidgets.QAction("查找", self)
         self.action_find.setObjectName("action_find")
         self.action_find.setShortcut(QtGui.QKeySequence.Find)
-        self.menu_edit.addAction(self.action_undo)
-        self.menu_edit.addAction(self.action_redo)
-        self.menu_edit.addAction(self.action_find)
-        self.menu_view = self.menuBar().addMenu("视图")
-        
-        # 工具菜单
-        self.menu_tool.addAction(self.action_validate_state_machine)
+        self.menu_edit.addActions((self.action_undo, self.action_redo, self.action_find))
+
+        self.action_add_state = QtWidgets.QAction("新建状态", self)
+        self.action_add_state.setObjectName("action_add_state")
+        self.action_add_lifecycle = QtWidgets.QAction("新建生命周期", self)
+        self.action_add_lifecycle.setObjectName("action_add_lifecycle")
+        self.action_add_transition = QtWidgets.QAction("新建迁移", self)
+        self.action_add_transition.setObjectName("action_add_transition")
+        self.action_edit_numeric_formula = QtWidgets.QAction("编辑数值公式", self)
+        self.action_edit_numeric_formula.setObjectName("action_edit_numeric_formula")
+        self.action_locate_source = QtWidgets.QAction("定位源码", self)
+        self.action_locate_source.setObjectName("action_locate_source")
+        self.menu_model.addActions(
+            (
+                self.action_add_state,
+                self.action_add_lifecycle,
+                self.action_add_transition,
+                self.action_edit_numeric_formula,
+                self.action_locate_source,
+            )
+        )
+
+        self.action_validate_state_machine.setText("运行检查")
         self.action_validate_state_machine.setShortcut("F5")
+        self.menu_inspect.addAction(self.action_validate_state_machine)
+
         self.action_stop_task = QtWidgets.QAction("停止当前任务", self)
         self.action_stop_task.setObjectName("action_stop_task")
         self.action_stop_task.setShortcut("Shift+F5")
-        self.menu_tool.addAction(self.action_stop_task)
-        self.menu_tool.addAction(self.action_graph_gen)
-        self.menu_tool.addAction(self.action_code_gen)
-        
-        # 连接菜单项信号
+
+        self.action_code_gen.setText("代码生成")
+        self.action_code_gen.setShortcut(self._product_shortcut("Shift+G"))
+        self.menu_generation.addAction(self.action_code_gen)
+
+        self.action_unified_export = QtWidgets.QAction("统一导出", self)
+        self.action_unified_export.setObjectName("action_unified_export")
+        self.action_unified_export.setShortcut(self._product_shortcut("Shift+X"))
+        self.action_graph_gen.setText("刷新图形")
+        self.action_graph_gen.setShortcut(QtGui.QKeySequence())
+        self.menu_export.addActions(
+            (self.action_unified_export, self.action_export_state_machine)
+        )
+
+        self._init_workspace_actions()
+        self.menu_inspect.addAction(self.action_show_diagnostics)
+        self.menu_simulation.addActions(
+            (
+                self.action_show_simulation,
+                self.action_show_dynamic_validation,
+                self.action_stop_task,
+            )
+        )
+        self.menu_view.addActions(
+            (
+                self.action_show_model,
+                self.action_show_source,
+                self.action_show_graph,
+                self.action_show_diagnostics,
+                self.action_graph_gen,
+            )
+        )
+
         self.action_import_state_machine.triggered.connect(self._import_statechart)
         self.action_save_state_machine.triggered.connect(self._save_current_document)
         self.action_export_state_machine.triggered.connect(self._export_statechart)
@@ -342,6 +424,72 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self.action_redo.triggered.connect(self._redo_document)
         self.action_find.triggered.connect(self._focus_find_target)
         self.action_stop_task.triggered.connect(self._cancel_active_task)
+        self.action_add_state.triggered.connect(self._buton_add_state)
+        self.action_add_lifecycle.triggered.connect(self._on_button_lifecycle_clicked)
+        self.action_add_transition.triggered.connect(self._on_button_transition_clicked)
+        self.action_edit_numeric_formula.triggered.connect(self._edit_numeric_formula)
+        self.action_locate_source.triggered.connect(self._locate_selected_state_source)
+        self._refresh_recent_files_menu()
+
+    @staticmethod
+    def _product_shortcut(suffix):
+        modifier = "Meta" if sys.platform == "darwin" else "Ctrl"
+        return QtGui.QKeySequence("{}+{}".format(modifier, suffix))
+
+    def _init_workspace_actions(self):
+        definitions = (
+            ("action_show_model", "模型", 1, self.model_workspace, "tree_all_state"),
+            ("action_show_source", "源码", 2, self.source_workspace, "source_editor"),
+            (
+                "action_show_graph",
+                "图形",
+                3,
+                self.graph_workspace,
+                "graph_refresh_button",
+            ),
+            (
+                "action_show_diagnostics",
+                "检查",
+                4,
+                self.diagnostics_workspace,
+                "diagnostics_table",
+            ),
+            (
+                "action_show_simulation",
+                "普通仿真",
+                5,
+                self.simulation_workspace,
+                "simulation_initialize_button",
+            ),
+            (
+                "action_show_dynamic_validation",
+                "动态验证",
+                6,
+                self.dynamic_validation_workspace,
+                "dynamic_case_combo",
+            ),
+        )
+        for name, text, number, page, focus_name in definitions:
+            action = QtWidgets.QAction(text, self)
+            action.setObjectName(name)
+            action.setShortcut(self._product_shortcut(str(number)))
+            action.triggered.connect(
+                lambda checked=False, target=page, focus=focus_name: (
+                    self._activate_workspace(target, focus)
+                )
+            )
+            setattr(self, name, action)
+
+    def _activate_workspace(self, page, focus_object_name=None):
+        index = self.workspace_tabs.indexOf(page)
+        if index < 0 or not self.workspace_tabs.isTabEnabled(index):
+            return False
+        self.workspace_tabs.setCurrentIndex(index)
+        if focus_object_name:
+            target = self.findChild(QtWidgets.QWidget, focus_object_name)
+            if target is not None and target.isEnabled():
+                target.setFocus(Qt.ShortcutFocusReason)
+        return True
 
     def _init_task_result_dock(self):
         self.task_result_dock = TaskResultDock(self.task_center, self)
@@ -358,7 +506,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
             self._size_task_result_dock_on_first_show
         )
         self.task_result_dock.show_full_paths_action.toggled.connect(
-            lambda _checked: self._update_document_actions()
+            self._path_display_mode_changed
         )
         self.task_result_dock.hide()
         self.action_toggle_task_results = self.task_result_dock.toggleViewAction()
@@ -366,6 +514,10 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self.action_toggle_task_results.setObjectName("action_toggle_task_results")
         self.action_toggle_task_results.setShortcut("Ctrl+Shift+J")
         self.menu_view.addAction(self.action_toggle_task_results)
+
+    def _path_display_mode_changed(self, _checked):
+        self._refresh_recent_files_menu()
+        self._update_document_actions()
 
     def _size_task_result_dock_on_first_show(self, visible):
         if not visible or self._task_result_dock_sized:
@@ -486,6 +638,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         )
         self.simulation_panel.cycle_requested.connect(self._cycle_simulation)
         self.simulation_panel.run_requested.connect(self._run_simulation)
+        self.simulation_panel.pause_requested.connect(self._pause_simulation)
         self.simulation_panel.reset_requested.connect(self._reset_simulation)
         self.simulation_panel.cancel_requested.connect(
             lambda: self._cancel_workspace_kind("ordinary-simulation")
@@ -661,6 +814,10 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self.workspace_tabs.setCurrentWidget(self.source_workspace)
         self.source_editor.setFocus(Qt.ShortcutFocusReason)
 
+    def _locate_selected_state_source(self):
+        state = self._get_pro_state()
+        return self._open_source_ref(getattr(state, "source_ref", None))
+
     def _cancel_active_task(self):
         record = self.task_result_dock.selected_record
         active = {
@@ -695,6 +852,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         if self.at_page_initial:
             self.stackedWidget_state_machine.setCurrentIndex(1)
             self.at_page_initial = False
+        self._update_document_actions()
 
     def _init_tree_style(self):
         self.tree_all_state.header().hide()
@@ -1296,7 +1454,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
                 summary="正在加载 {}".format(file_path),
             )
             self._logical_load_operations[operation.operation_id] = operation
-            self._refresh_task_result_dock(show=True)
+            self._refresh_task_result_dock()
 
         def load_document(token):
             token.raise_if_cancelled()
@@ -1572,6 +1730,88 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         ]
         recent.insert(0, canonical)
         self.settings.setValue("recent_files", recent[:10])
+        self._refresh_recent_files_menu()
+
+    def _recent_files(self):
+        result = []
+        for item in self.settings.value("recent_files", [], type=list):
+            if not item:
+                continue
+            try:
+                result.append(str(canonical_path(item)))
+            except (OSError, TypeError, ValueError):
+                continue
+        return result
+
+    def _refresh_recent_files_menu(self):
+        menu = getattr(self, "menu_recent_files", None)
+        if menu is None:
+            return
+        menu.clear()
+        recent = self._recent_files()
+        if not recent:
+            placeholder = QtWidgets.QAction("暂无最近文件", menu)
+            placeholder.setObjectName("action_recent_files_empty")
+            placeholder.setEnabled(False)
+            menu.addAction(placeholder)
+        else:
+            for index, path in enumerate(recent, 1):
+                action = QtWidgets.QAction(
+                    "{}. {}".format(index, Path(path).name), menu
+                )
+                action.setObjectName("action_recent_file_{}".format(index))
+                action.setProperty("recent_path", path)
+                visible_path = path
+                if not self._show_full_paths():
+                    visible_path = self.task_center.redactor.redact_text(path)
+                action.setToolTip(visible_path)
+                action.setStatusTip(visible_path)
+                action.triggered.connect(
+                    lambda checked=False, selected=path: (
+                        self._open_recent_file(selected)
+                    )
+                )
+                menu.addAction(action)
+            menu.addSeparator()
+            menu.addAction(self.action_clear_recent_files)
+        self.action_clear_recent_files.setEnabled(bool(recent))
+
+    def _show_full_paths(self):
+        dock = getattr(self, "task_result_dock", None)
+        if dock is not None:
+            return dock.show_full_paths_action.isChecked()
+        return self.settings.value(
+            "task_center/show_full_paths", False, type=bool
+        )
+
+    def _clear_recent_files(self):
+        self.settings.setValue("recent_files", [])
+        self._refresh_recent_files_menu()
+
+    def _remove_recent_file(self, path):
+        canonical_key = os.path.normcase(str(canonical_path(path)))
+        recent = [
+            item
+            for item in self._recent_files()
+            if os.path.normcase(item) != canonical_key
+        ]
+        self.settings.setValue("recent_files", recent)
+        self._refresh_recent_files_menu()
+
+    def _open_recent_file(self, path):
+        canonical = str(canonical_path(path))
+        if not os.path.isfile(canonical):
+            self._remove_recent_file(canonical)
+            QtWidgets.QMessageBox.warning(
+                self,
+                "最近文件不可用",
+                "文件不存在或已不可访问，已从最近文件中移除。",
+            )
+            return None
+        if not self._confirm_document_replacement():
+            return None
+        self.state_machine_file_path = os.path.dirname(canonical)
+        return self._start_document_load(canonical)
 
     def _clear_model_projection(self):
         self._variable_edit_timer.stop()
@@ -1591,10 +1831,31 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         current_valid = (
             session is not None and session.current_valid_snapshot is not None
         )
-        self.action_save_state_machine.setEnabled(session is not None)
+        self.action_save_state_machine.setEnabled(
+            session is not None and session.dirty
+        )
         self.action_graph_gen.setEnabled(current_valid)
         self.action_code_gen.setEnabled(current_valid)
         self.action_unified_export.setEnabled(current_valid)
+        model_available = bool(
+            session is not None or getattr(self, "state_manager", None) is not None
+        )
+        self.action_show_model.setEnabled(model_available)
+        self.action_show_source.setEnabled(session is not None)
+        self.action_show_diagnostics.setEnabled(session is not None)
+        self.action_show_graph.setEnabled(current_valid)
+        self.action_show_simulation.setEnabled(current_valid)
+        self.action_show_dynamic_validation.setEnabled(current_valid)
+        editable_model = bool(model_available and (session is None or current_valid))
+        self.action_add_state.setEnabled(editable_model)
+        self.action_add_lifecycle.setEnabled(editable_model)
+        self.action_add_transition.setEnabled(editable_model)
+        self.action_edit_numeric_formula.setEnabled(bool(current_valid))
+        selected_state = self._get_pro_state() if model_available else None
+        self.action_locate_source.setEnabled(
+            session is not None
+            and getattr(selected_state, "source_ref", None) is not None
+        )
         self.action_undo.setEnabled(
             session is not None
             and (
@@ -1643,6 +1904,8 @@ class AppMainWindow(QMainWindow, UIMainWindow):
             current_valid
             and self._simulation_session.matches(revision, fingerprint)
         ):
+            if self._simulation_run_control is not None:
+                self._simulation_run_control.request_stale()
             self._simulation_session = None
             self.simulation_panel.invalidate()
         self._refresh_diagnostics_panel()
@@ -1662,10 +1925,17 @@ class AppMainWindow(QMainWindow, UIMainWindow):
                 "未保存" if session.dirty else "已保存"
             )
             self.document_revision_label.setText(
-                "revision {}".format(session.source_revision)
+                "版本 {}".format(session.source_revision)
             )
             self.document_validation_label.setText(
-                session.validation_state.value
+                {
+                    ValidationState.PENDING: "正在校验",
+                    ValidationState.VALID: "有效",
+                    ValidationState.VALID_WITH_WARNINGS: "有效但有警告",
+                    ValidationState.INVALID_SYNTAX: "语法无效",
+                    ValidationState.INVALID_MODEL: "模型无效",
+                    ValidationState.STALE_DEPENDENCY: "依赖已失效",
+                }[session.validation_state]
             )
             snapshot = session.current_valid_snapshot
             dependency_count = (
@@ -1864,7 +2134,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         QtWidgets.QMessageBox.warning(
             self,
             "无法应用建议修复",
-            "当前 revision 无法将上游建议安全映射到可编辑源码。",
+            "当前版本无法将上游建议安全映射到可编辑源码。",
         )
         return False
 
@@ -2166,7 +2436,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
                     )
                 )
                 handle.finished.connect(self._finish_model_check)
-                self._refresh_task_result_dock(show=True)
+                self._refresh_task_result_dock()
                 return handle
             # 获取当前的DSL代码
             dsl_content = state_manager_to_dsl(self.state_manager)
@@ -2247,7 +2517,9 @@ class AppMainWindow(QMainWindow, UIMainWindow):
             )
         finally:
             self._task_handles.pop(result.stamp.task_id, None)
-            self._refresh_task_result_dock(show=True)
+            self._refresh_task_result_dock(
+                show=self._task_status_requires_attention(status)
+            )
             self.model_check_finished.emit(result)
 
     def _graph_gen(self):
@@ -3266,26 +3538,20 @@ class AppMainWindow(QMainWindow, UIMainWindow):
             )
             return False
         snapshot = self.document_session.current_valid_snapshot
-        declaration = snapshot.source_index.text_for_ref(source_ref)
-        if "{" in declaration:
+        old_name = state.name
+        owner_path = tuple(state.get_full_path().split("."))
+        try:
+            name_ref = snapshot.source_index.state_name_ref(owner_path)
+        except Exception as error:
             QtWidgets.QMessageBox.warning(
-                self,
-                "暂不支持",
-                "复合状态请在源码编辑器中重命名，以避免重叠引用。",
+                self, "编辑未应用", "无法定位状态名称：\n{}".format(error)
             )
             return False
-        old_name = state.name
-        state_text = re.sub(
-            r"(\bstate\s+){}\b".format(re.escape(old_name)),
-            r"\g<1>{}".format(new_name),
-            declaration,
-            count=1,
-        )
         edits = [
             TextEdit.for_ref(
                 self.document_session.source_revision,
-                source_ref,
-                state_text,
+                name_ref,
+                new_name,
                 intent="rename state",
             )
         ]
@@ -3317,6 +3583,15 @@ class AppMainWindow(QMainWindow, UIMainWindow):
                             intent="rename state reference",
                         )
                     )
+        try:
+            snapshot.source_index.validate_edit_refs(
+                *(edit.source_ref for edit in edits if edit.source_ref is not None)
+            )
+        except Exception as error:
+            QtWidgets.QMessageBox.warning(
+                self, "编辑未应用", "重命名引用冲突：\n{}".format(error)
+            )
+            return False
         return self._commit_form_edits(tuple(edits))
 
     def _delete_projected_state(self, state):
@@ -3606,7 +3881,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self._task_handles[handle.stamp.task_id] = handle
         self._workspace_task_actions[handle.stamp.task_id] = action
         handle.finished.connect(finished_slot)
-        self._refresh_task_result_dock(show=True)
+        self._refresh_task_result_dock()
         return handle
 
     def _refresh_graph(self):
@@ -3618,7 +3893,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         def work(token):
             with tempfile.TemporaryDirectory(prefix="fcstm-graph-preview-") as td:
                 target = Path(td) / "graph.png"
-                self.export_service.export(
+                exported = self.export_service.export(
                     "png",
                     str(target),
                     session.source_text,
@@ -3627,7 +3902,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
                     cancel_token=token,
                 )
                 token.raise_if_cancelled()
-                return target.read_bytes()
+                return {"png": target.read_bytes(), "graph": exported.graph}
 
         self.graph_panel.set_busy(True, "正在渲染状态图")
         return self._submit_product_task(
@@ -3680,7 +3955,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         status = self._history_status_for_result(result)
         artifacts = ()
         if result.status is TaskStatus.SUCCESS and action.get("mode") == "preview":
-            self.graph_panel.present_png(result.value, action["revision"])
+            self.graph_panel.present_png(result.value["png"], action["revision"])
             summary = "状态图已刷新"
         elif result.status is TaskStatus.SUCCESS:
             self.graph_panel.set_busy(False, "导出完成")
@@ -3689,10 +3964,10 @@ class AppMainWindow(QMainWindow, UIMainWindow):
             )
             summary = "状态图导出完成"
         elif result.status is TaskStatus.CANCELLED:
-            self.graph_panel.set_busy(False, "cancelled，未发布截断产物")
+            self.graph_panel.set_busy(False, "已取消，未发布截断产物")
             summary = "状态图任务已取消"
         elif result.status is TaskStatus.STALE:
-            self.graph_panel.show_error("结果已过期，请刷新当前 revision")
+            self.graph_panel.show_stale("结果已过期，请刷新当前版本")
             summary = "状态图结果已过期"
         else:
             self.graph_panel.show_error(result.error)
@@ -3705,7 +3980,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
     def _start_generation(self, request, dialog):
         session = self.document_session
         if session is None or session.current_valid_snapshot is None:
-            dialog.show_error("当前 revision 无有效快照")
+            dialog.show_error("当前版本无有效快照")
             return None
         snapshot = session.current_valid_snapshot
 
@@ -3752,7 +4027,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
             summary = "代码生成已取消，既有输出未修改"
         elif result.status is TaskStatus.STALE:
             if dialog is not None:
-                dialog.show_error("结果已过期，请基于当前 revision 重试")
+                dialog.show_error("结果已过期，请基于当前版本重试")
             summary = "代码生成结果已过期"
         else:
             if dialog is not None:
@@ -3766,7 +4041,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
     def _start_unified_export(self, request, dialog):
         session = self.document_session
         if session is None or session.current_valid_snapshot is None:
-            dialog.show_error("当前 revision 无有效快照")
+            dialog.show_error("当前版本无有效快照")
             return None
         snapshot = session.current_valid_snapshot
         dynamic_json = self.dynamic_validation_panel.report_json()
@@ -3813,7 +4088,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
             summary = "统一导出已取消，既有文件未修改"
         elif result.status is TaskStatus.STALE:
             if dialog is not None:
-                dialog.show_error("结果已过期，请基于当前 revision 重试")
+                dialog.show_error("结果已过期，请基于当前版本重试")
             summary = "统一导出结果已过期"
         else:
             if dialog is not None:
@@ -3862,11 +4137,13 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self._workspace_task_actions[handle.stamp.task_id] = action
         if kind == "ordinary-simulation":
             handle.finished.connect(self._finish_simulation_task)
-            self.simulation_panel.set_busy(True, running_summary)
+            self.simulation_panel.set_busy(
+                True, running_summary, pausable=action == "run"
+            )
         else:
             handle.finished.connect(self._finish_dynamic_validation_task)
             self.dynamic_validation_panel.set_busy(True, running_summary)
-        self._refresh_task_result_dock(show=True)
+        self._refresh_task_result_dock()
         return handle
 
     def _initialize_simulation(self, options):
@@ -3919,6 +4196,8 @@ class AppMainWindow(QMainWindow, UIMainWindow):
             return None
         max_cycles = int(options["max_cycles"])
         events = tuple(options.get("events", ()))
+        run_control = SimulationRunControl()
+        self._simulation_run_control = run_control
 
         def work(token):
             return self.simulation_service.run(
@@ -3926,11 +4205,19 @@ class AppMainWindow(QMainWindow, UIMainWindow):
                 max_cycles=max_cycles,
                 events_per_cycle=tuple(events for _ in range(max_cycles)),
                 cancel_token=token,
+                run_control=run_control,
             )
 
         return self._submit_workspace_task(
             "ordinary-simulation", "run", work, "正在连续运行普通仿真"
         )
+
+    def _pause_simulation(self):
+        if self._simulation_run_control is None:
+            return False
+        self._simulation_run_control.request_pause()
+        self.simulation_panel.show_pause_requested()
+        return True
 
     def _reset_simulation(self):
         simulation = self._simulation_session
@@ -3953,8 +4240,11 @@ class AppMainWindow(QMainWindow, UIMainWindow):
     @QtCore.pyqtSlot(object)
     def _finish_simulation_task(self, result):
         action = self._workspace_task_actions.pop(result.stamp.task_id, None)
+        if action == "run":
+            self._simulation_run_control = None
         history_status = self._history_status_for_result(result)
         messages = ()
+        summary_override = None
         if result.status is TaskStatus.SUCCESS:
             if action == "initialize":
                 self._simulation_session = result.value["session"]
@@ -3976,9 +4266,16 @@ class AppMainWindow(QMainWindow, UIMainWindow):
                     messages = (self._simulation_error_message(result.value.error),)
             elif action == "run":
                 self.simulation_panel.append_cycles(result.value.cycles)
-                if result.value.cancelled:
+                if result.value.stale:
+                    history_status = HistoryTaskStatus.STALE
+                    self._simulation_session = None
+                    self.simulation_panel.invalidate()
+                elif result.value.cancelled:
                     history_status = HistoryTaskStatus.CANCELLED
                     self.simulation_panel.show_cancelled()
+                elif result.value.paused:
+                    self.simulation_panel.show_paused()
+                    summary_override = "普通仿真已暂停，可从当前 runtime 继续"
                 elif result.value.cycles and result.value.cycles[-1].error is not None:
                     history_status = HistoryTaskStatus.FAILED
                     messages = (
@@ -3999,11 +4296,13 @@ class AppMainWindow(QMainWindow, UIMainWindow):
                 self.simulation_panel.append_cycles(result.value.cycles)
             self.simulation_panel.show_cancelled()
         elif result.status is TaskStatus.STALE:
+            if action == "run" and result.value is not None:
+                self.simulation_panel.append_cycles(result.value.cycles)
             self._simulation_session = None
             self.simulation_panel.invalidate()
         else:
             self.simulation_panel.show_error(result.error)
-        summary = {
+        summary = summary_override or {
             HistoryTaskStatus.SUCCESS: "普通仿真操作完成",
             HistoryTaskStatus.CANCELLED: "普通仿真已在 cycle 边界取消",
             HistoryTaskStatus.STALE: "普通仿真结果已过期",
@@ -4021,6 +4320,40 @@ class AppMainWindow(QMainWindow, UIMainWindow):
             "cause_type": error.cause_type,
             "cause_message": error.cause_message,
         }
+
+    def _edit_numeric_formula(self):
+        if self.document_session is None:
+            return False
+        cursor = self.source_editor.textCursor()
+        if not cursor.hasSelection():
+            block_text = cursor.block().text()
+            match = re.search(r"=\s*(.+?)\s*;?\s*$", block_text)
+            if match is None:
+                QtWidgets.QMessageBox.information(
+                    self,
+                    "编辑数值公式",
+                    "请在变量定义中选中数值表达式，或将光标放在带初值的定义行。",
+                )
+                return False
+            block_start = cursor.block().position()
+            cursor.setPosition(block_start + match.start(1))
+            cursor.setPosition(
+                block_start + match.end(1), QtGui.QTextCursor.KeepAnchor
+            )
+        initial_text = cursor.selectedText()
+        dialog = DialogNumericFormula(
+            self,
+            initial_text=initial_text,
+            revision_provider=lambda: self.document_session.source_revision,
+            variable_definitions_provider=lambda: extract_variable_definitions(
+                self.document_session.source_text
+            ),
+        )
+        if dialog.exec_() != QtWidgets.QDialog.Accepted:
+            return False
+        cursor.insertText(dialog.formula_text())
+        self.source_editor.setTextCursor(cursor)
+        return True
 
     def _run_dynamic_validation(self, request):
         mode = request.get("mode")
@@ -4098,7 +4431,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
                 messages = self._dynamic_report_messages(report)
             self.dynamic_validation_panel.show_cancelled()
         elif result.status is TaskStatus.STALE:
-            self.dynamic_validation_panel.show_error("结果已过期，请基于当前 revision 重试")
+            self.dynamic_validation_panel.show_error("结果已过期，请基于当前版本重试")
         else:
             self.dynamic_validation_panel.show_error(result.error)
         summary = {
@@ -4222,7 +4555,13 @@ class AppMainWindow(QMainWindow, UIMainWindow):
             )
         finally:
             self._task_handles.pop(result.stamp.task_id, None)
-            self._refresh_task_result_dock(show=True)
+            self._refresh_task_result_dock(
+                show=self._task_status_requires_attention(status)
+            )
+
+    @staticmethod
+    def _task_status_requires_attention(status):
+        return status in {HistoryTaskStatus.FAILED, HistoryTaskStatus.STALE}
 
     def _refresh_task_result_dock(self, show=False):
         self.task_result_dock.refresh()
@@ -4279,7 +4618,9 @@ class AppMainWindow(QMainWindow, UIMainWindow):
             )
         finally:
             self._logical_load_operations.pop(outcome.operation_id, None)
-            self._refresh_task_result_dock(show=True)
+            self._refresh_task_result_dock(
+                show=self._task_status_requires_attention(status)
+            )
 
     def _cancel_task_record(self, task_id):
         operation = self._logical_load_operations.get(task_id)
@@ -4314,7 +4655,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
             operation.cancel()
         else:
             handle.cancel()
-        self._refresh_task_result_dock(show=True)
+        self._refresh_task_result_dock()
         return True
 
     def _retry_task_record(self, record):

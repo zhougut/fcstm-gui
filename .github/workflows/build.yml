@@ -128,9 +128,23 @@ jobs:
                 --viewport "$viewport" \
                 --json-report "evidence/source/acceptance/${key}/report.json" \
                 --artifact-dir "evidence/source/acceptance/${key}/artifacts" \
-                2>&1 | tee "evidence/source/acceptance/${key}/run.log"
+              2>&1 | tee "evidence/source/acceptance/${key}/run.log"
             done
           done
+
+      - name: M7 application service branch coverage gate
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python -m coverage run --branch -m pytest \
+            test/application/test_simulation.py \
+            test/application/test_graph_render.py \
+            test/application/test_export.py \
+            -q --timeout=60
+          python -m coverage report \
+            --include='app/application/simulation.py,app/application/graph_render.py,app/application/export.py' \
+            --fail-under=90 | tee evidence/source/application-branch-coverage.txt
 
       - name: Generate, compile, and execute all five templates
         shell: bash
@@ -164,7 +178,7 @@ jobs:
                 --viewport "$viewport" \
                 --json-report "evidence/onedir/acceptance/${key}/report.json" \
                 --artifact-dir "evidence/onedir/acceptance/${key}/artifacts" \
-                2>&1 | tee "evidence/onedir/acceptance/${key}/run.log"
+              2>&1 | tee "evidence/onedir/acceptance/${key}/run.log"
             done
           done
 
@@ -201,7 +215,7 @@ jobs:
                 --viewport "$viewport" \
                 --json-report "evidence/onefile/acceptance/${key}/report.json" \
                 --artifact-dir "evidence/onefile/acceptance/${key}/artifacts" \
-                2>&1 | tee "evidence/onefile/acceptance/${key}/run.log"
+              2>&1 | tee "evidence/onefile/acceptance/${key}/run.log"
             done
           done
 
@@ -213,13 +227,56 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Build machine-readable evidence manifest
+        shell: bash
+        run: |
+          python - <<'PY'
+          import shutil
+          from pathlib import Path
+
+          evidence = Path('evidence')
+          inputs = evidence / 'manifest-input'
+          reports = inputs / 'reports'
+          screenshots = inputs / 'screenshots'
+          tools = evidence / 'tools'
+          reports.mkdir(parents=True, exist_ok=True)
+          screenshots.mkdir(parents=True, exist_ok=True)
+          tools.mkdir(parents=True, exist_ok=True)
+          shutil.copyfile('scripts/build_acceptance_evidence.py', tools / 'build_acceptance_evidence.py')
+          shutil.copyfile('scripts/verify_evidence_contract.py', tools / 'verify_evidence_contract.py')
+          for path in tuple(evidence.rglob('*')):
+              if not path.is_file() or inputs in path.parents:
+                  continue
+              relative = path.relative_to(evidence).as_posix().replace('/', '__')
+              if path.name == 'self-check.json' or (
+                  path.name == 'report.json' and 'acceptance' in path.parts
+              ):
+                  shutil.copyfile(str(path), str(reports / relative))
+              if path.suffix.lower() == '.png':
+                  shutil.copyfile(str(path), str(screenshots / relative))
+          PY
+          python scripts/build_acceptance_evidence.py \
+            --reports evidence/manifest-input/reports \
+            --artifacts evidence \
+            --screenshots evidence/manifest-input/screenshots \
+            --commit "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID" \
+            --product "fcstm-gui-${{ matrix.label }}.zip" \
+            --product "dist/${{ matrix.executable }}" \
+            --product-manifest evidence/product-manifest.json \
+            --output evidence/acceptance-evidence.json
+          python scripts/verify_evidence_contract.py \
+            --evidence evidence/acceptance-evidence.json \
+            --reports evidence/manifest-input/reports \
+            --artifact-root evidence
+
       - name: Upload build verification evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: fcstm-gui-${{ matrix.label }}-build-evidence
           path: evidence
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 14
 
   # Stage 2 deliberately has no checkout, setup-python, pip, or project
@@ -242,6 +299,9 @@ jobs:
           uname -a || true
           which python || true
           which python3 || true
+          which cc || true
+          which c++ || true
+          which dot || true
 
       - name: Install Linux host runtime only
         if: runner.os == 'Linux'
@@ -272,6 +332,12 @@ jobs:
           name: fcstm-gui-${{ matrix.label }}-onefile
           path: downloaded/onefile
 
+      - name: Download build evidence tools and product manifest
+        uses: actions/download-artifact@v8
+        with:
+          name: fcstm-gui-${{ matrix.label }}-build-evidence
+          path: build-evidence
+
       - name: Unpack onedir
         shell: bash
         run: |
@@ -287,47 +353,184 @@ jobs:
         shell: bash
         run: chmod +x "extracted/fcstm-gui/${{ matrix.executable }}" "downloaded/onefile/${{ matrix.executable }}"
 
+      - name: Verify executable format and x86_64 architecture
+        shell: bash
+        run: |
+          set -o pipefail
+          onedir="extracted/fcstm-gui/${{ matrix.executable }}"
+          onefile="downloaded/onefile/${{ matrix.executable }}"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cat > verify-pe-x64.ps1 <<'PS'
+          param([string]$Path)
+          $bytes = [System.IO.File]::ReadAllBytes($Path)
+          if ($bytes.Length -lt 0x40 -or $bytes[0] -ne 0x4d -or $bytes[1] -ne 0x5a) { throw "missing MZ header: $Path" }
+          $pe = [BitConverter]::ToInt32($bytes, 0x3c)
+          if ($bytes.Length -lt ($pe + 6) -or $bytes[$pe] -ne 0x50 -or $bytes[$pe + 1] -ne 0x45) { throw "missing PE signature: $Path" }
+          $machine = [BitConverter]::ToUInt16($bytes, $pe + 4)
+          if ($machine -ne 0x8664) { throw "not PE x86_64: $Path machine=$machine" }
+          Write-Output "$Path PE x86_64"
+          PS
+            powershell -NoProfile -ExecutionPolicy Bypass -File verify-pe-x64.ps1 "$onedir" | tee onedir-file.txt
+            powershell -NoProfile -ExecutionPolicy Bypass -File verify-pe-x64.ps1 "$onefile" | tee onefile-file.txt
+          else
+            file "$onedir" | tee onedir-file.txt
+            file "$onefile" | tee onefile-file.txt
+            case "$RUNNER_OS" in
+              Linux) pattern='ELF 64-bit.*x86-64' ;;
+              macOS) pattern='Mach-O 64-bit.*x86_64' ;;
+              *) exit 1 ;;
+            esac
+            grep -E "$pattern" onedir-file.txt
+            grep -E "$pattern" onefile-file.txt
+          fi
+
       - name: Black-box verify onedir
         shell: bash
-        env:
-          QT_QPA_PLATFORM: offscreen
         run: |
           set -o pipefail
           mkdir -p evidence/onedir
+          tool_dir="$RUNNER_TEMP/fcstm-gui-no-tools"
+          mkdir -p "$tool_dir"
+          for tool in cc c++ gcc g++ clang clang++ dot; do
+            {
+              echo '#!/usr/bin/env sh'
+              echo "echo fresh runner forbids $tool >&2"
+              echo 'exit 127'
+            } > "$tool_dir/$tool"
+            {
+              echo '@echo off'
+              echo "echo fresh runner forbids $tool 1>&2"
+              echo 'exit /b 127'
+            } > "$tool_dir/$tool.cmd"
+            chmod +x "$tool_dir/$tool" "$tool_dir/$tool.cmd"
+          done
+          export PATH="$tool_dir:$PATH"
+          export GRAPHVIZ_DOT="$tool_dir/dot"
+          export CC="$tool_dir/cc"
+          export CXX="$tool_dir/c++"
           executable="./extracted/fcstm-gui/${{ matrix.executable }}"
-          "$executable" --self-check --json-report evidence/onedir/self-check.json 2>&1 | tee evidence/onedir/self-check.log
+          run_gui() {
+            case "$RUNNER_OS" in
+              Linux) xvfb-run -a env QT_QPA_PLATFORM=xcb "$@" ;;
+              Windows) env QT_QPA_PLATFORM=windows "$@" ;;
+              macOS) env QT_QPA_PLATFORM=cocoa "$@" ;;
+              *) return 1 ;;
+            esac
+          }
+          run_gui "$executable" --self-check --json-report evidence/onedir/self-check.json 2>&1 | tee evidence/onedir/self-check.log
           for viewport in 1280x720 1920x1080; do
             for scale in 1 1.5 2; do
               key="${viewport}-scale-${scale}"
               mkdir -p "evidence/onedir/acceptance/${key}"
-              QT_SCALE_FACTOR="$scale" "$executable" --acceptance-check \
+              QT_SCALE_FACTOR="$scale" run_gui "$executable" --acceptance-check \
                 --viewport "$viewport" \
                 --json-report "evidence/onedir/acceptance/${key}/report.json" \
                 --artifact-dir "evidence/onedir/acceptance/${key}/artifacts" \
-                2>&1 | tee "evidence/onedir/acceptance/${key}/run.log"
+              2>&1 | tee "evidence/onedir/acceptance/${key}/run.log"
             done
           done
+          case "$RUNNER_OS" in
+            Linux) expected_qt=xcb ;;
+            Windows) expected_qt=windows ;;
+            macOS) expected_qt=cocoa ;;
+          esac
+          grep -F "\"qt_platform\": \"$expected_qt\"" evidence/onedir/self-check.json
+          find evidence/onedir/acceptance -name report.json -exec \
+            grep -F "\"qt_platform\": \"$expected_qt\"" {} \;
 
       - name: Black-box verify onefile
         shell: bash
-        env:
-          QT_QPA_PLATFORM: offscreen
         run: |
           set -o pipefail
           mkdir -p evidence/onefile
+          tool_dir="$RUNNER_TEMP/fcstm-gui-no-tools"
+          mkdir -p "$tool_dir"
+          for tool in cc c++ gcc g++ clang clang++ dot; do
+            {
+              echo '#!/usr/bin/env sh'
+              echo "echo fresh runner forbids $tool >&2"
+              echo 'exit 127'
+            } > "$tool_dir/$tool"
+            {
+              echo '@echo off'
+              echo "echo fresh runner forbids $tool 1>&2"
+              echo 'exit /b 127'
+            } > "$tool_dir/$tool.cmd"
+            chmod +x "$tool_dir/$tool" "$tool_dir/$tool.cmd"
+          done
+          export PATH="$tool_dir:$PATH"
+          export GRAPHVIZ_DOT="$tool_dir/dot"
+          export CC="$tool_dir/cc"
+          export CXX="$tool_dir/c++"
           executable="./downloaded/onefile/${{ matrix.executable }}"
-          "$executable" --self-check --json-report evidence/onefile/self-check.json 2>&1 | tee evidence/onefile/self-check.log
+          run_gui() {
+            case "$RUNNER_OS" in
+              Linux) xvfb-run -a env QT_QPA_PLATFORM=xcb "$@" ;;
+              Windows) env QT_QPA_PLATFORM=windows "$@" ;;
+              macOS) env QT_QPA_PLATFORM=cocoa "$@" ;;
+              *) return 1 ;;
+            esac
+          }
+          run_gui "$executable" --self-check --json-report evidence/onefile/self-check.json 2>&1 | tee evidence/onefile/self-check.log
           for viewport in 1280x720 1920x1080; do
             for scale in 1 1.5 2; do
               key="${viewport}-scale-${scale}"
               mkdir -p "evidence/onefile/acceptance/${key}"
-              QT_SCALE_FACTOR="$scale" "$executable" --acceptance-check \
+              QT_SCALE_FACTOR="$scale" run_gui "$executable" --acceptance-check \
                 --viewport "$viewport" \
                 --json-report "evidence/onefile/acceptance/${key}/report.json" \
                 --artifact-dir "evidence/onefile/acceptance/${key}/artifacts" \
-                2>&1 | tee "evidence/onefile/acceptance/${key}/run.log"
+              2>&1 | tee "evidence/onefile/acceptance/${key}/run.log"
             done
           done
+          case "$RUNNER_OS" in
+            Linux) expected_qt=xcb ;;
+            Windows) expected_qt=windows ;;
+            macOS) expected_qt=cocoa ;;
+          esac
+          grep -F "\"qt_platform\": \"$expected_qt\"" evidence/onefile/self-check.json
+          find evidence/onefile/acceptance -name report.json -exec \
+            grep -F "\"qt_platform\": \"$expected_qt\"" {} \;
+
+      - name: Build fresh-runner evidence manifest
+        shell: bash
+        run: |
+          python - <<'PY'
+          import shutil
+          from pathlib import Path
+
+          evidence = Path('evidence')
+          inputs = evidence / 'manifest-input'
+          reports = inputs / 'reports'
+          screenshots = inputs / 'screenshots'
+          reports.mkdir(parents=True, exist_ok=True)
+          screenshots.mkdir(parents=True, exist_ok=True)
+          for path in tuple(evidence.rglob('*')):
+              if not path.is_file() or inputs in path.parents:
+                  continue
+              relative = path.relative_to(evidence).as_posix().replace('/', '__')
+              if path.name == 'self-check.json' or (
+                  path.name == 'report.json' and 'acceptance' in path.parts
+              ):
+                  shutil.copyfile(str(path), str(reports / relative))
+              if path.suffix.lower() == '.png':
+                  shutil.copyfile(str(path), str(screenshots / relative))
+          PY
+          python build-evidence/tools/build_acceptance_evidence.py \
+            --reports evidence/manifest-input/reports \
+            --artifacts evidence \
+            --screenshots evidence/manifest-input/screenshots \
+            --commit "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID" \
+            --product "downloaded/onedir/fcstm-gui-${{ matrix.label }}.zip" \
+            --product "downloaded/onefile/${{ matrix.executable }}" \
+            --product-manifest evidence/product-manifest.json \
+            --expected-product-manifest build-evidence/product-manifest.json \
+            --output evidence/acceptance-evidence.json
+          python build-evidence/tools/verify_evidence_contract.py \
+            --evidence evidence/acceptance-evidence.json \
+            --reports evidence/manifest-input/reports \
+            --artifact-root evidence
 
       - name: Upload fresh-runner verification evidence
         if: always()
@@ -335,5 +538,5 @@ jobs:
         with:
           name: fcstm-gui-${{ matrix.label }}-fresh-evidence
           path: evidence
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 14

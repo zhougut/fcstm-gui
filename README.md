@@ -39,36 +39,9 @@ fcstm-gui --acceptance-check \
   --artifact-dir acceptance/artifacts
 ```
 
-任一独立检查失败都会返回非零退出码。完整操作见
+任一独立检查失败都会返回非零退出码。按界面逐步操作、核对截图和恢复失败的
+完整流程见 [`docs/完整操作验收手册.md`](docs/完整操作验收手册.md)；DSL 参考见
 [`docs/使用说明.md`](docs/使用说明.md)，环境问题见
 [`docs/故障排查.md`](docs/故障排查.md)，CI 门禁见
-[`docs/验收矩阵.md`](docs/验收矩阵.md)。
-
-## 📋 环境要求 (Prerequisites)
-
-为了确保程序正常运行，请遵守以下版本要求：
-
-*   **Python 版本**: Python 3.7.16 
-(Docker VNC 镜像)
-*   **Java 环境**: 需要安装 JRE (用于支持 PlantUML 功能)
-
-## 🛠️ 安装步骤 (Installation)
-
-### 1. 安装系统依赖 (System Dependencies)
-由于项目使用了 PyQt5，在 Linux/Docker 环境下**必须**安装以下系统库，否则会报错 `xcb plugin not found`：
-
-```bash
-sudo apt-get update
-sudo apt-get install -y \
-    python3.7 python3-pip \
-    default-jre \
-    graphviz \
-    libgl1-mesa-glx \
-    libegl1-mesa \
-    libxkbcommon-x11-0 \
-    libxcb-xinerama0 \
-    libxcb-cursor0 \
-    libqt5gui5 \
-    fonts-wqy-microhei
-
-
+[`docs/验收矩阵.md`](docs/验收矩阵.md)。发布包不要求安装 Python、Graphviz 或
+编译器；源码开发环境与发布包运行环境必须分开理解。

@@ -47,7 +47,7 @@ def test_graph_workspace_refresh_selection_controls_and_real_svg_export(
     assert window.workspace_tabs.currentWidget() is window.graph_workspace
     assert window.graph_panel.view.scene() is not None
     assert not window.graph_panel.view.scene().sceneRect().isEmpty()
-    assert "ready" in window.graph_panel.status_label.text()
+    assert "就绪" in window.graph_panel.status_label.text()
     root_item = window.tree_all_state.topLevelItem(0)
     child_item = root_item.child(0)
     window.tree_all_state.setCurrentItem(child_item)
@@ -158,11 +158,39 @@ def test_unified_export_dialog_writes_inspect_json_and_preserves_existing_file(
     with qtbot.waitSignal(window.unified_export_finished, timeout=5000):
         dialog.start_button.click()
     assert target.read_text(encoding="utf-8") == "old"
-    assert dialog.status_label.text().startswith("failed:")
+    assert dialog.status_label.text().startswith("失败：")
     failed = [
         item for item in window.task_center.records if item.kind == "unified-export"
     ][-1]
     assert failed.status is HistoryTaskStatus.FAILED
+
+
+def test_export_terminal_states_use_localized_user_text(qtbot):
+    dialog = DialogExport(dynamic_available=False)
+    qtbot.addWidget(dialog)
+
+    dialog.show_cancelled()
+    assert dialog.status_label.text() == "已取消，既有文件未修改"
+
+    dialog.show_error("boom")
+    assert dialog.status_label.text() == "失败：boom"
+
+
+def test_generation_custom_mode_replaces_builtin_template_description(
+    qtbot, delivery_window
+):
+    dialog = DialogCodeGen(
+        delivery_window, delivery_window.generation_service.list_templates()
+    )
+    qtbot.addWidget(dialog)
+    builtin_description = dialog.description_edit.toPlainText()
+
+    dialog.template_mode_combo.setCurrentIndex(1)
+
+    assert "自定义模板" in dialog.description_edit.toPlainText()
+    assert dialog.description_edit.toPlainText() != builtin_description
+    assert dialog.custom_template_edit.isEnabled()
+    assert not dialog.template_combo.isEnabled()
 
 
 def test_delivery_controls_are_accessible_and_tables_have_headers(delivery_window):

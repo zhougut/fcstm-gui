@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "fcstm-gui.visual-review.v1",
+  "type": "object",
+  "required": ["schema", "version", "reviewer", "status", "items"],
+  "properties": {
+    "schema": {"const": "fcstm-gui.visual-review"},
+    "version": {"const": 1},
+    "reviewer": {"type": "string", "minLength": 1},
+    "status": {"enum": ["passed", "failed", "blocked"]},
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["image", "status", "notes"],
+        "properties": {
+          "image": {"type": "string", "minLength": 1},
+          "status": {"enum": ["passed", "failed", "blocked"]},
+          "notes": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

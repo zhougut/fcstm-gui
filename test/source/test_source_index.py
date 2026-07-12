@@ -1218,3 +1218,75 @@ def test_in_memory_root_overlay_supports_a_not_yet_saved_document(tmp_path):
     assert not path.exists()
     assert index.root_document.path == str(path.resolve())
     assert index.root_document.text == "state New;"
+
+
+def test_state_name_refs_target_only_declaration_tokens_with_unicode_crlf_comments_and_internal_transitions(tmp_path):
+    source = (
+        "// 😀 state Parent Leaf should stay in comment\r\n"
+        "state Root {\r\n"
+        "    // state Parent should stay in nested comment\r\n"
+        "    state Parent {\r\n"
+        "        state Leaf;\r\n"
+        "        state Other;\r\n"
+        "        [*] -> Leaf;\r\n"
+        "        Leaf -> Other;\r\n"
+        "    }\r\n"
+        "}\r\n"
+    )
+    path = tmp_path / "composite.fcstm"
+    path.write_bytes(source.encode("utf-8"))
+    index = build_source_index(path, revision=3, encoding="utf-8")
+
+    assert _slices(index, "state_name") == ["Root", "Parent", "Leaf", "Other"]
+    parent_name = index.state_name_ref(("Root", "Parent"))
+    assert index.text_for_ref(parent_name) == "Parent"
+    assert parent_name.resolved_path == ("Root", "Parent")
+    assert parent_name.scope == "declaration"
+    assert parent_name.declaration_ref.kind == "state"
+
+    edited = (
+        source[:parent_name.span.start_offset]
+        + "Renamed"
+        + source[parent_name.span.end_offset:]
+    )
+
+    assert "// state Parent should stay in nested comment" in edited
+    assert "Leaf -> Other;" in edited
+    assert edited[:parent_name.span.start_offset] == source[
+        :parent_name.span.start_offset
+    ]
+    assert edited[parent_name.span.start_offset + len("Renamed"):] == source[
+        parent_name.span.end_offset:
+    ]
+
+    path.write_bytes(edited.encode("utf-8"))
+    rebuilt = build_source_index(path, revision=4, encoding="utf-8")
+    assert (
+        index.text_for_ref(index.state_name_ref(("Root", "Parent", "Leaf")))
+        == "Leaf"
+    )
+    assert index.text_for_ref(parent_name) == "Parent"
+    assert (
+        rebuilt.text_for_ref(rebuilt.state_name_ref(("Root", "Renamed")))
+        == "Renamed"
+    )
+
+
+def test_state_name_ref_rejects_stale_refs_and_overlapping_edit_sets(tmp_path):
+    path = tmp_path / "stale-overlap.fcstm"
+    path.write_text("state Root { state Parent { state Leaf; } }", encoding="utf-8")
+    index = build_source_index(path, revision=1)
+    parent_state = next(
+        ref for ref in index.refs(kind="state") if ref.owner_path == ("Root", "Parent")
+    )
+    parent_name = index.state_name_ref(("Root", "Parent"))
+
+    with pytest.raises(SourceIndexError, match="overlap"):
+        index.validate_edit_refs(parent_state, parent_name)
+
+    index.validate_edit_refs(parent_name)
+    path.write_text("state Root { state Renamed { state Leaf; } }", encoding="utf-8")
+    rebuilt = build_source_index(path, revision=2)
+
+    with pytest.raises(StaleSourceRefError):
+        rebuilt.validate_edit_refs(parent_name)

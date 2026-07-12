@@ -1747,7 +1747,14 @@ state TrafficLight {
         assert window.model_scroll_area.isVisible()
         assert window.event_table.height() >= 60
         assert window.event_reference_table.height() >= 60
+        assert not window.task_result_dock.isVisible()
+        window.action_toggle_task_results.trigger()
+        QtWidgets.QApplication.processEvents()
         assert window.task_result_dock.isVisible()
+        qtbot.waitUntil(
+            lambda: window.task_result_dock.widget().height() <= 220,
+            timeout=1000,
+        )
         assert 150 <= window.task_result_dock.widget().height() <= 220
         # Native dock title bars differ by platform (macOS adds about 19 px).
         assert window.task_result_dock.height() <= 260
@@ -2025,8 +2032,8 @@ state TrafficLight {
         assert window.source_editor.toPlainText() == before_session.source_text
         assert warnings and warnings[0][1] == "编辑未应用"
 
-    def test_composite_state_rename_is_source_editor_only_and_non_mutating(
-        self, monkeypatch, window, tmp_path
+    def test_composite_state_rename_edits_name_token_and_external_references(
+        self, window, tmp_path
     ):
         source = tmp_path / "composite.fcstm"
         source.write_text(
@@ -2037,20 +2044,21 @@ state TrafficLight {
         session = window.document_service.load(source)
         window._set_active_document_session(session)
         group = window.state_manager.get_state_by_path("Root.Group")
-        warnings = []
-        monkeypatch.setattr(
-            QtWidgets.QMessageBox,
-            "warning",
-            lambda *args, **kwargs: warnings.append(args),
-        )
 
         changed = window._rename_projected_state(group, "Renamed")
 
-        assert not changed
-        assert window.document_session is session
-        assert "state Group" in window.document_session.source_text
-        assert "Renamed" not in window.document_session.source_text
-        assert warnings and warnings[0][1] == "暂不支持"
+        assert changed
+        assert window.document_session.source_revision == session.source_revision + 1
+        assert "state Renamed { state A; [*] -> A; A -> [*]; }" in (
+            window.document_session.source_text
+        )
+        assert "[*] -> Renamed; Renamed -> [*];" in (
+            window.document_session.source_text
+        )
+        assert "state Group" not in window.document_session.source_text
+        assert (
+            window.state_manager.get_state_by_path("Root.Renamed.A") is not None
+        )
 
     def test_add_button_creates_root_then_child_without_blocking_dialog(
         self, monkeypatch, qtbot, window
@@ -2090,13 +2098,16 @@ state TrafficLight {
 
     def test_menu_actions_are_connected_to_window_commands(self, window):
         file_actions = window.menu_file.actions()
-        tool_actions = window.menu_tool.actions()
+        inspect_actions = window.menu_inspect.actions()
+        generation_actions = window.menu_generation.actions()
+        export_actions = window.menu_export.actions()
+        view_actions = window.menu_view.actions()
 
         assert window.action_import_state_machine in file_actions
-        assert window.action_export_state_machine in file_actions
-        assert window.action_validate_state_machine in tool_actions
-        assert window.action_graph_gen in tool_actions
-        assert window.action_code_gen in tool_actions
+        assert window.action_export_state_machine in export_actions
+        assert window.action_validate_state_machine in inspect_actions
+        assert window.action_graph_gen in view_actions
+        assert window.action_code_gen in generation_actions
 
         for action in (
             window.action_import_state_machine,

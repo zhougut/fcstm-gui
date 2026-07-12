@@ -3,6 +3,7 @@ from PyQt5 import QtCore, QtWidgets
 from app.application.formulas import (
     FormulaKind,
     FormulaValidationRequest,
+    FormulaValidationResult,
     FormulaValidationService,
     FormulaValidationStatus,
 )
@@ -100,16 +101,13 @@ class FormulaEditor(QtWidgets.QWidget):
         if request is None:
             return
         if self._allow_empty and not request.text:
-            result = self._service.validate(
-                FormulaValidationRequest(
-                    request.kind,
-                    "true" if request.kind is FormulaKind.LOGICAL else "0"
-                    if request.kind is FormulaKind.NUMERIC
-                    else "x = x;",
-                    request.source_revision,
-                    request.request_token,
-                    request.variable_definitions,
-                )
+            result = FormulaValidationResult(
+                kind=request.kind,
+                status=FormulaValidationStatus.VALID,
+                message="允许留空",
+                location=None,
+                source_revision=request.source_revision,
+                request_token=request.request_token,
             )
         else:
             result = self._service.validate(request)
@@ -139,7 +137,7 @@ class FormulaEditor(QtWidgets.QWidget):
             summary = " ".join(result.message.split())
             marker = summary.find("Invalid syntax")
             if marker >= 0:
-                summary = summary[marker:]
+                summary = "语法错误"
             if len(summary) > 38:
                 summary = summary[:35] + "..."
             self.status_label.setText(prefix + "无效：" + summary)

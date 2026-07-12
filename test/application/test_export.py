@@ -117,6 +117,24 @@ def test_local_plantuml_exports_png_svg_pdf_with_real_java(tmp_path, export_cont
         data = target.read_bytes()
         assert result.size == len(data) > 0
         assert marker in data[:4096]
+        assert result.graph is not None
+        assert result.graph.engine == "smetana"
+        assert result.graph.path == str(target.resolve())
+        assert result.graph.output_sha256
+        assert result.graph.semantic_svg_sha256
+
+
+def test_plantuml_export_is_normalized_to_smetana(tmp_path, export_context):
+    session, snapshot, _manager = export_context
+    target = tmp_path / "graph.puml"
+
+    ExportService().export(
+        "plantuml", str(target), session.source_text, snapshot.model
+    )
+
+    content = target.read_text(encoding="utf-8")
+    assert content.count("!pragma layout smetana") == 1
+    assert content.splitlines()[1] == "!pragma layout smetana"
 
 
 class CancelAfterWrite(object):

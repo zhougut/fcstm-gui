@@ -8,10 +8,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import (
     Callable,
-    DefaultDict,
-    Dict,
     Iterable,
-    List,
     Mapping,
     Optional,
     Sequence,
@@ -258,6 +255,46 @@ class SourceIndex:
                 )
             )
         return tuple(projections)
+
+    def state_name_ref(self, owner_path: Tuple[str, ...]) -> SourceRef:
+        document = self.root_document
+        candidates = tuple(
+            ref
+            for ref in self.refs(kind="state_name", document_id=document.document_id)
+            if ref.owner_path == owner_path and ref.editable
+        )
+        if len(candidates) != 1:
+            raise SourceIndexError(
+                "state name token is not unique for {}".format(owner_path)
+            )
+        return candidates[0]
+
+    def validate_edit_refs(self, *refs: SourceRef) -> None:
+        document = self.root_document
+        ranges = []
+        for ref in refs:
+            self.text_for_ref(ref)
+            if (
+                not ref.editable
+                or ref.file_id != document.document_id
+                or ref.source_uri != document.uri
+            ):
+                raise StaleSourceRefError(
+                    "edit ref is not an editable root source ref"
+                )
+            ranges.append((ref.span.start_offset, ref.span.end_offset, ref))
+        ranges.sort(key=lambda item: (item[0], item[1]))
+        previous_end = None
+        previous_ref = None
+        for start, end, ref in ranges:
+            if previous_end is not None and start < previous_end:
+                raise SourceIndexError(
+                    "edit refs overlap: {} and {}".format(
+                        previous_ref.stable_key, ref.stable_key
+                    )
+                )
+            previous_end = end
+            previous_ref = ref
 
     def projection_for_model_transition(
         self, transition: object, source_uri: Optional[str] = None
@@ -820,6 +857,18 @@ def _index_document(
             current_key = "state:{}".format(".".join(current_owner))
             state_ref = add_ref(context, "state", current_owner, current_key)
             current_declaration_ref = state_ref.declaration_ref
+            state_token = getattr(context, "state_id", None)
+            if state_token is not None:
+                add_offset_ref(
+                    state_token.start,
+                    state_token.stop + 1,
+                    "state_name",
+                    current_owner,
+                    current_key + "/name",
+                    current_declaration_ref,
+                    resolved_path=current_owner,
+                    scope="declaration",
+                )
             current_kind = "state"
         elif rule == "def_assignment":
             name = (
@@ -1485,7 +1534,6 @@ def _build_from_snapshot(
     before: _CapturedSnapshot,
     revision: Optional[int],
 ) -> SourceIndex:
-    before_manifest = before.manifest
     before_fingerprint = before.fingerprint
     if revision is None:
         revision = int(before_fingerprint[:16], 16)

@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "fcstm-gui.acceptance-evidence.v1",
+  "type": "object",
+  "required": ["schema", "version", "generated_at", "run", "inputs", "reports", "artifacts", "screenshots", "product_manifests", "counts"],
+  "properties": {
+    "schema": {"const": "fcstm-gui.acceptance-evidence"},
+    "version": {"const": 1},
+    "generated_at": {"type": "string", "minLength": 1},
+    "run": {
+      "type": "object",
+      "required": ["commit", "run_id"],
+      "properties": {
+        "commit": {"type": "string", "minLength": 1},
+        "run_id": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "inputs": {
+      "type": "object",
+      "required": ["reports_dir", "artifacts_dir", "screenshots_dir"],
+      "properties": {
+        "reports_dir": {"type": "string", "minLength": 1},
+        "artifacts_dir": {"type": "string", "minLength": 1},
+        "screenshots_dir": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "reports": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/report"}
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/file"}
+    },
+    "screenshots": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/file"}
+    },
+    "product_manifests": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/file"}
+    },
+    "counts": {
+      "type": "object",
+      "required": ["reports", "artifacts", "screenshots", "product_manifests"],
+      "properties": {
+        "reports": {"type": "integer", "minimum": 0},
+        "artifacts": {"type": "integer", "minimum": 0},
+        "screenshots": {"type": "integer", "minimum": 0},
+        "product_manifests": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "file": {
+      "type": "object",
+      "required": ["path", "size", "sha256"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "size": {"type": "integer", "minimum": 0},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      },
+      "additionalProperties": false
+    },
+    "report": {
+      "type": "object",
+      "required": ["path", "size", "sha256", "schema", "version", "status"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "size": {"type": "integer", "minimum": 0},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "schema": {"type": "string", "minLength": 1},
+        "version": {"type": "integer"},
+        "status": {"type": "string", "minLength": 1},
+        "counts": {"type": "object"}
+      },
+      "additionalProperties": false
+    }
+  }
+}

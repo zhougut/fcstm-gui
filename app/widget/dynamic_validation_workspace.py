@@ -7,6 +7,23 @@ import json
 from PyQt5 import QtCore, QtWidgets
 
 
+_CASE_LABELS = {
+    "design_evented_pseudo_chain_invalid_then_valid": "伪链无效后转为有效",
+    "design_validation_failure_multilevel_transition": "多层迁移设计校验失败",
+    "expression_failure_transition_guard_raises_expression_error": "迁移 guard 表达式异常",
+    "pseudo_self_loop_step_limit_raises_dfs_error": "伪状态自环达到步数上限",
+}
+
+_STATUS_LABELS = {
+    "draft": "待运行",
+    "passed": "通过",
+    "mismatch": "不匹配",
+    "failed": "失败",
+    "expected_exception_passed": "预期异常通过",
+    "cancelled": "已取消",
+}
+
+
 class DynamicValidationWorkspace(QtWidgets.QWidget):
     run_requested = QtCore.pyqtSignal(object)
     cancel_requested = QtCore.pyqtSignal()
@@ -37,10 +54,20 @@ class DynamicValidationWorkspace(QtWidgets.QWidget):
         source_row.addWidget(self.browse_button)
         layout.addLayout(source_row)
 
+        self.scope_notice = QtWidgets.QLabel(
+            "动态验证会执行场景并比较 expected/actual；它不是形式化验证、模型检测或证明。",
+            self,
+        )
+        self.scope_notice.setObjectName("dynamic_validation_scope_notice")
+        self.scope_notice.setAccessibleName("动态验证能力边界")
+        self.scope_notice.setWordWrap(True)
+        layout.addWidget(self.scope_notice)
+
         controls = QtWidgets.QHBoxLayout()
         self.case_combo = QtWidgets.QComboBox(self)
         self.case_combo.setObjectName("dynamic_case_combo")
-        self.case_combo.addItems(list(case_ids))
+        for case_id in case_ids:
+            self.case_combo.addItem(_CASE_LABELS.get(case_id, case_id), case_id)
         self.run_user_button = self._button("用户场景", "dynamic_run_user_button")
         self.run_case_button = self._button("内置用例", "dynamic_run_case_button")
         self.run_suite_button = self._button("全部验收", "dynamic_run_suite_button")
@@ -57,7 +84,7 @@ class DynamicValidationWorkspace(QtWidgets.QWidget):
             controls.addWidget(button)
         layout.addLayout(controls)
 
-        self.status_label = QtWidgets.QLabel("draft", self)
+        self.status_label = QtWidgets.QLabel(_STATUS_LABELS["draft"], self)
         self.status_label.setObjectName("dynamic_status_label")
         self.status_label.setTextInteractionFlags(QtCore.Qt.TextSelectableByKeyboard)
         layout.addWidget(self.status_label)
@@ -101,7 +128,7 @@ class DynamicValidationWorkspace(QtWidgets.QWidget):
         )
         self.run_case_button.clicked.connect(
             lambda: self.run_requested.emit(
-                {"mode": "case", "case_id": self.case_combo.currentText()}
+                {"mode": "case", "case_id": self.case_combo.currentData()}
             )
         )
         self.run_suite_button.clicked.connect(
@@ -127,9 +154,9 @@ class DynamicValidationWorkspace(QtWidgets.QWidget):
     def set_document_available(self, available):
         self._document_available = bool(available)
         if not available:
-            self.status_label.setText("当前 revision 无有效快照")
+            self.status_label.setText("当前版本无有效快照")
         elif self._report is None:
-            self.status_label.setText("draft")
+            self.status_label.setText(_STATUS_LABELS["draft"])
         self._update_actions()
 
     def set_busy(self, busy, status=None):
@@ -153,7 +180,7 @@ class DynamicValidationWorkspace(QtWidgets.QWidget):
         self.details_edit.setPlainText(
             json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2)
         )
-        self.status_label.setText(report.status)
+        self.status_label.setText(_STATUS_LABELS.get(report.status, report.status))
         self.result_table.setRowCount(0)
         cases = report.cases if hasattr(report, "cases") else (report,)
         for case in cases:
@@ -175,9 +202,9 @@ class DynamicValidationWorkspace(QtWidgets.QWidget):
         row = self.result_table.rowCount()
         self.result_table.insertRow(row)
         values = (
-            case_id,
+            _CASE_LABELS.get(case_id, case_id),
             index,
-            status,
+            _STATUS_LABELS.get(status, status),
             ", ".join(events),
             json.dumps(expected, ensure_ascii=False, sort_keys=True),
             json.dumps(actual, ensure_ascii=False, sort_keys=True),
@@ -185,7 +212,8 @@ class DynamicValidationWorkspace(QtWidgets.QWidget):
         )
         for column, value in enumerate(values):
             item = QtWidgets.QTableWidgetItem(str(value))
-            item.setToolTip(str(value))
+            tooltip = case_id if column == 0 else status if column == 2 else value
+            item.setToolTip(str(tooltip))
             item.setData(QtCore.Qt.UserRole, {"expected": expected, "actual": actual, "diffs": diffs})
             self.result_table.setItem(row, column, item)
 
@@ -207,12 +235,12 @@ class DynamicValidationWorkspace(QtWidgets.QWidget):
 
     def show_cancelled(self):
         self._busy = False
-        self.status_label.setText("cancelled，已保留完成的 step")
+        self.status_label.setText("已取消，已保留完成的步骤")
         self._update_actions()
 
     def show_error(self, message):
         self._busy = False
-        self.status_label.setText("failed: " + str(message))
+        self.status_label.setText("失败：" + str(message))
         self.status_label.setToolTip(str(message))
         self._update_actions()
 
