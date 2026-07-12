@@ -153,6 +153,7 @@ def test_build_workflow_keeps_fresh_products_independent_of_host_toolchains():
     shadow_loop = "for tool in python python3 cc c++ gcc g++ clang clang++ dot; do"
     assert verify.count(shadow_loop) == 4
     assert verify.count('test "$status" -eq 127') == 2
+    assert verify.count('tool_dir="$(cygpath -u "$RUNNER_TEMP")') == 2
     assert "purpose=evidence-control-plane-only" in verify
     assert "project_imports=forbidden" in verify
     assert "product_execution=forbidden" in verify

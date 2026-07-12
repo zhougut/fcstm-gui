@@ -87,6 +87,9 @@ always expose the same contract.
 - Every Windows step that imports CairoSVG, including isolated coverage gates,
   must append the MSYS2 MinGW runtime directory to PATH. Environment changes
   inside one GitHub Actions shell step do not carry into the next step.
+- Never prepend a raw Windows `RUNNER_TEMP` such as `D:\\a\\_temp` to a Bash
+  PATH. The drive colon becomes a PATH separator; convert it with `cygpath -u`
+  before creating or resolving fresh-runner shadow commands.
 - Watch every workflow job and inspect logs and produced artifacts. A green build
   job does not compensate for a skipped or failed fresh-runner verification job.
 - After each CI fix, push the smallest coherent commit and watch the replacement

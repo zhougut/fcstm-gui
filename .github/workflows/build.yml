@@ -451,7 +451,11 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p evidence/onedir
-          tool_dir="$RUNNER_TEMP/fcstm-gui-no-tools"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            tool_dir="$(cygpath -u "$RUNNER_TEMP")/fcstm-gui-no-tools"
+          else
+            tool_dir="$RUNNER_TEMP/fcstm-gui-no-tools"
+          fi
           mkdir -p "$tool_dir"
           : > evidence/onedir/fresh-tool-preflight.log
           for tool in python python3 cc c++ gcc g++ clang clang++ dot; do
@@ -522,7 +526,11 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p evidence/onefile
-          tool_dir="$RUNNER_TEMP/fcstm-gui-no-tools"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            tool_dir="$(cygpath -u "$RUNNER_TEMP")/fcstm-gui-no-tools"
+          else
+            tool_dir="$RUNNER_TEMP/fcstm-gui-no-tools"
+          fi
           mkdir -p "$tool_dir"
           : > evidence/onefile/fresh-tool-preflight.log
           for tool in python python3 cc c++ gcc g++ clang clang++ dot; do
