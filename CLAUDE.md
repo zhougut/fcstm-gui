@@ -100,6 +100,9 @@ always expose the same contract.
 - Do not add a schema-validation dependency only for CI. When the repository
   does not already depend on one, keep runtime validation strict and provide a
   standard-library frozen-artifact checker for the supported schema subset.
+- Byte-pinned fixture and provenance resources must have explicit Git EOL
+  attributes. Windows checkout conversion is a real byte mutation; never make
+  SHA-256 checks line-ending-insensitive to hide it.
 
 ## Required Local Evidence
 

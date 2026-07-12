@@ -1,0 +1,9 @@
+*.py text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+*.ui text eol=lf
+*.fcstm text eol=lf
+
+app/resources/self_check/dynamic_validation/** text eol=lf
