@@ -134,6 +134,14 @@ always expose the same contract.
   layout allocation, Qt can place focusable siblings on top of each other;
   keep stable control widths and fail geometry acceptance on every real
   overlap instead of adding platform-specific overlap exemptions.
+- Run cross-platform GUI checks with the target platform plugin (`xcb`,
+  `windows`, or `cocoa`) in both package and fresh stages. Windows Qt can
+  access-violate when a real modal message box is driven through the offscreen
+  plugin; an offscreen pass is not evidence for the native Windows path.
+- Size pytest timeouts for the complete parameterized acceptance duration.
+  A per-test timeout shorter than the known 140-item run produces a false
+  infrastructure failure even when all preceding items pass; keep the inner
+  operation timeouts strict and give the outer suite a separate broad bound.
 - Resolve bundled resources from `_MEIPASS` when frozen and from the module's
   repository/package root in source mode. Never assume the process cwd is the
   project root.
@@ -176,6 +184,10 @@ always expose the same contract.
   cancellable external rendering, retain the `Popen` handle, poll the task token,
   and terminate/kill the child; checks only before and after a blocking call do
   not provide a usable cancel boundary.
+- Do not reject every successful renderer invocation merely because stderr is
+  non-empty. macOS Java may emit the exact software-GL warning while producing
+  valid Smetana output; allow only an explicit reviewed warning line, preserve
+  it in execution metadata, and keep every unknown stderr line fail-closed.
 - Give every acceptance case a stable parameterized id and isolated fixture or
   proven reset. One failed GUI path must not poison later cases or collapse
   multiple unexecuted capabilities into one broad passing item.

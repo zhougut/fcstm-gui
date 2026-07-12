@@ -112,19 +112,25 @@ jobs:
 
       - name: Tests and source product checks
         shell: bash
-        env:
-          QT_QPA_PLATFORM: offscreen
         run: |
           set -o pipefail
           if [ -n "${MINGW_BIN:-}" ]; then export PATH="$PATH:$MINGW_BIN"; fi
+          run_gui() {
+            case "$RUNNER_OS" in
+              Linux) xvfb-run -a env QT_QPA_PLATFORM=xcb "$@" ;;
+              Windows) env QT_QPA_PLATFORM=windows "$@" ;;
+              macOS) env QT_QPA_PLATFORM=cocoa "$@" ;;
+              *) return 1 ;;
+            esac
+          }
           mkdir -p evidence/source
-          python -m pytest test -q --timeout=30 --junitxml=evidence/source/pytest.xml 2>&1 | tee evidence/source/pytest.log
-          python main.py --self-check --json-report evidence/source/self-check.json 2>&1 | tee evidence/source/self-check.log
+          run_gui python -m pytest test -q --timeout=300 --junitxml=evidence/source/pytest.xml 2>&1 | tee evidence/source/pytest.log
+          run_gui python main.py --self-check --json-report evidence/source/self-check.json 2>&1 | tee evidence/source/self-check.log
           for viewport in 1280x720 1920x1080; do
             for scale in 1 1.5 2; do
               key="${viewport}-scale-${scale}"
               mkdir -p "evidence/source/acceptance/${key}"
-              QT_SCALE_FACTOR="$scale" python main.py --acceptance-check \
+              QT_SCALE_FACTOR="$scale" run_gui python main.py --acceptance-check \
                 --viewport "$viewport" \
                 --json-report "evidence/source/acceptance/${key}/report.json" \
                 --artifact-dir "evidence/source/acceptance/${key}/artifacts" \
@@ -162,19 +168,26 @@ jobs:
         shell: bash
         env:
           FCSTM_GUI_BUILD_MODE: onedir
-          QT_QPA_PLATFORM: offscreen
         run: |
           set -o pipefail
           if [ -n "${MINGW_BIN:-}" ]; then export PATH="$PATH:$MINGW_BIN"; fi
+          run_gui() {
+            case "$RUNNER_OS" in
+              Linux) xvfb-run -a env QT_QPA_PLATFORM=xcb "$@" ;;
+              Windows) env QT_QPA_PLATFORM=windows "$@" ;;
+              macOS) env QT_QPA_PLATFORM=cocoa "$@" ;;
+              *) return 1 ;;
+            esac
+          }
           pyinstaller --noconfirm main.spec 2>&1 | tee evidence/onedir-build.log
           mkdir -p evidence/onedir
           executable="./dist/fcstm-gui/${{ matrix.executable }}"
-          "$executable" --self-check --json-report evidence/onedir/self-check.json 2>&1 | tee evidence/onedir/self-check.log
+          run_gui "$executable" --self-check --json-report evidence/onedir/self-check.json 2>&1 | tee evidence/onedir/self-check.log
           for viewport in 1280x720 1920x1080; do
             for scale in 1 1.5 2; do
               key="${viewport}-scale-${scale}"
               mkdir -p "evidence/onedir/acceptance/${key}"
-              QT_SCALE_FACTOR="$scale" "$executable" --acceptance-check \
+              QT_SCALE_FACTOR="$scale" run_gui "$executable" --acceptance-check \
                 --viewport "$viewport" \
                 --json-report "evidence/onedir/acceptance/${key}/report.json" \
                 --artifact-dir "evidence/onedir/acceptance/${key}/artifacts" \
@@ -198,20 +211,27 @@ jobs:
         shell: bash
         env:
           FCSTM_GUI_BUILD_MODE: onefile
-          QT_QPA_PLATFORM: offscreen
         run: |
           set -o pipefail
           if [ -n "${MINGW_BIN:-}" ]; then export PATH="$PATH:$MINGW_BIN"; fi
+          run_gui() {
+            case "$RUNNER_OS" in
+              Linux) xvfb-run -a env QT_QPA_PLATFORM=xcb "$@" ;;
+              Windows) env QT_QPA_PLATFORM=windows "$@" ;;
+              macOS) env QT_QPA_PLATFORM=cocoa "$@" ;;
+              *) return 1 ;;
+            esac
+          }
           rm -rf build dist
           pyinstaller --noconfirm main.spec 2>&1 | tee evidence/onefile-build.log
           mkdir -p evidence/onefile
           executable="./dist/${{ matrix.executable }}"
-          "$executable" --self-check --json-report evidence/onefile/self-check.json 2>&1 | tee evidence/onefile/self-check.log
+          run_gui "$executable" --self-check --json-report evidence/onefile/self-check.json 2>&1 | tee evidence/onefile/self-check.log
           for viewport in 1280x720 1920x1080; do
             for scale in 1 1.5 2; do
               key="${viewport}-scale-${scale}"
               mkdir -p "evidence/onefile/acceptance/${key}"
-              QT_SCALE_FACTOR="$scale" "$executable" --acceptance-check \
+              QT_SCALE_FACTOR="$scale" run_gui "$executable" --acceptance-check \
                 --viewport "$viewport" \
                 --json-report "evidence/onefile/acceptance/${key}/report.json" \
                 --artifact-dir "evidence/onefile/acceptance/${key}/artifacts" \

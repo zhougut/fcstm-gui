@@ -347,3 +347,12 @@ def test_java_pipe_reports_missing_runtime_jar_and_nonzero_exit(monkeypatch, tmp
         GraphRenderService._render_java_pipe(
             "@startuml\n@enduml\n", tmp_path / "x.svg", "svg", str(jar)
         )
+
+
+def test_renderer_stderr_allows_only_known_macos_software_gl_warning():
+    graph_render._reject_unexpected_stderr(
+        "WARNING: GL pipe is running in software mode (Renderer ID=0x1020400)"
+    )
+
+    with pytest.raises(GraphRenderError, match="renderer stderr"):
+        graph_render._reject_unexpected_stderr("Cannot find Graphviz")

@@ -20,6 +20,9 @@ from PyQt5.QtGui import QImage
 
 
 GRAPH_ENGINE = "smetana"
+_BENIGN_STDERR_LINES = {
+    "WARNING: GL pipe is running in software mode (Renderer ID=0x1020400)",
+}
 _LAYOUT_RE = re.compile(r"^\s*!pragma\s+layout\s+\S+\s*$", re.IGNORECASE)
 _STATE_RE = re.compile(
     r'^\s*state\s+"([^"]+)"\s+as\s+([A-Za-z_][A-Za-z0-9_]*)',
@@ -379,8 +382,7 @@ class GraphRenderService(object):
                     process.returncode, stderr or "no stderr"
                 )
             )
-        if stderr:
-            raise GraphRenderError("PlantUML renderer stderr: " + stderr)
+        _reject_unexpected_stderr(stderr)
         path.write_bytes(stdout)
         return RendererExecution(
             renderer="java-jar-pipe",
@@ -417,6 +419,16 @@ def _stop_process(process):
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait()
+
+
+def _reject_unexpected_stderr(stderr):
+    unexpected = [
+        line.strip()
+        for line in stderr.splitlines()
+        if line.strip() and line.strip() not in _BENIGN_STDERR_LINES
+    ]
+    if unexpected:
+        raise GraphRenderError("PlantUML renderer stderr: " + "\n".join(unexpected))
 
 
 def _sha256(data: bytes) -> str:
