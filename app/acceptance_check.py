@@ -1983,8 +1983,13 @@ class AcceptanceDriver(object):
 
         def start_and_pause():
             _press(panel.run_button)
-            if not panel.pause_button.isEnabled():
-                raise RuntimeError("continuous run did not expose the pause control")
+            self._wait_until(
+                lambda: (
+                    panel.pause_button.isEnabled()
+                    and session.snapshot().cycle > before_cycle
+                ),
+                timeout_ms=5000,
+            )
             _press(panel.pause_button)
 
         paused_result = _wait_signal(
@@ -3241,10 +3246,40 @@ class AcceptanceDriver(object):
         _press(panel.actual_button)
         view = panel.view
         viewport = view.viewport()
-        scrollbar = view.verticalScrollBar()
-        before = scrollbar.value()
         start = viewport.rect().center()
-        end = start + QtCore.QPoint(0, -30)
+        wheel_steps = 0
+        while (
+            view.horizontalScrollBar().maximum() <= 0
+            and view.verticalScrollBar().maximum() <= 0
+            and wheel_steps < 12
+        ):
+            wheel = QtGui.QWheelEvent(
+                QtCore.QPointF(start),
+                QtCore.QPointF(viewport.mapToGlobal(start)),
+                QtCore.QPoint(),
+                QtCore.QPoint(0, 120),
+                QtCore.Qt.NoButton,
+                QtCore.Qt.NoModifier,
+                QtCore.Qt.NoScrollPhase,
+                False,
+            )
+            QtWidgets.QApplication.sendEvent(viewport, wheel)
+            self.app.processEvents()
+            wheel_steps += 1
+        horizontal = view.horizontalScrollBar()
+        vertical = view.verticalScrollBar()
+        if horizontal.maximum() > 0:
+            scrollbar = horizontal
+            delta = QtCore.QPoint(-30, 0)
+            orientation = "horizontal"
+        elif vertical.maximum() > 0:
+            scrollbar = vertical
+            delta = QtCore.QPoint(0, -30)
+            orientation = "vertical"
+        else:
+            raise RuntimeError("wheel zoom did not create a pannable graph range")
+        before = scrollbar.value()
+        end = start + delta
         QtTest.QTest.mousePress(viewport, QtCore.Qt.LeftButton, pos=start)
         move = QtGui.QMouseEvent(
             QtCore.QEvent.MouseMove,
@@ -3265,6 +3300,8 @@ class AcceptanceDriver(object):
                 )
             )
         self._current_evidence = {
+            "wheel_steps": wheel_steps,
+            "orientation": orientation,
             "scroll_before": before,
             "scroll_after": after,
             "scroll_maximum": scrollbar.maximum(),

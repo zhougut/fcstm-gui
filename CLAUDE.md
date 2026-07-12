@@ -227,6 +227,15 @@ always expose the same contract.
   Keyboard acceptance must raise the product window and wait for actual active
   window plus focus state before sending the standard `Cmd` shortcut, then wait
   for the target page instead of assuming one event-loop pass is sufficient.
+- A wide viewport can fit the entire graph at 100%, leaving both scrollbar
+  ranges at zero. A drag acceptance item must first deliver real wheel events
+  until the graph is pannable, then use press/move/release and assert the
+  resulting horizontal or vertical scroll fact; zero range is not drag proof.
+- A continuous simulation can observe an immediate pause request before its
+  first cycle. Pause/continue acceptance must wait until the same session has
+  advanced beyond its baseline cycle and the pause control is enabled, then
+  press pause and require retained cycle/transcript evidence. Fixed sleeps and
+  zero-cycle "paused" results do not prove boundary pause semantics.
 - Give every acceptance case a stable parameterized id and isolated fixture or
   proven reset. One failed GUI path must not poison later cases or collapse
   multiple unexecuted capabilities into one broad passing item.
