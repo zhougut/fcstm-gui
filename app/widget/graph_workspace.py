@@ -43,16 +43,21 @@ class GraphWorkspace(QtWidgets.QWidget):
         )
         self.export_button = self._button("导出", "graph_export_button")
         self.cancel_button = self._button("停止", "graph_cancel_button")
-        for widget in (
+        primary_buttons = (
             self.refresh_button,
             self.fit_button,
             self.actual_button,
             self.reset_button,
-        ):
+        )
+        for index, widget in enumerate(primary_buttons):
             controls.addWidget(widget)
+            if index + 1 < len(primary_buttons):
+                controls.addSpacing(8)
         controls.addStretch(1)
         controls.addWidget(self.export_combo)
+        controls.addSpacing(8)
         controls.addWidget(self.export_button)
+        controls.addSpacing(8)
         controls.addWidget(self.cancel_button)
         layout.addLayout(controls)
         self.status_label = QtWidgets.QLabel("当前版本无有效快照", self)

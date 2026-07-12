@@ -219,6 +219,14 @@ always expose the same contract.
   `QAction` from its product `QMenu`, trigger that action, and still gate on the
   asynchronous load signal plus the new session/path/text facts. Never replace
   this with a direct document-service or load-slot call.
+- Cocoa style can apply negative native control spacing even when adjacent
+  buttons have fixed widths. Separate graph-toolbar controls with explicit
+  fixed spacer items; shrinking buttons alone can preserve or worsen their
+  geometric overlap.
+- After a native dialog closes on macOS, `activateWindow()` is asynchronous.
+  Keyboard acceptance must raise the product window and wait for actual active
+  window plus focus state before sending the standard `Cmd` shortcut, then wait
+  for the target page instead of assuming one event-loop pass is sufficient.
 - Give every acceptance case a stable parameterized id and isolated fixture or
   proven reset. One failed GUI path must not poison later cases or collapse
   multiple unexecuted capabilities into one broad passing item.

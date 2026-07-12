@@ -817,15 +817,20 @@ class AcceptanceDriver(object):
 
     def _activate_workspace_shortcut(self, action, page, focus_name):
         before = self.app.focusWidget()
+        self.window.raise_()
         self.window.activateWindow()
-        receiver = self.window.centralWidget()
+        receiver = self.window
         receiver.setFocus(QtCore.Qt.ActiveWindowFocusReason)
-        self.app.processEvents()
+        self._wait_until(
+            lambda: self.window.isActiveWindow() and receiver.hasFocus(),
+            timeout_ms=5000,
+        )
         QtTest.QTest.keySequence(receiver, action.shortcut())
-        self.app.processEvents()
+        self._wait_until(
+            lambda: self.window.workspace_tabs.currentWidget() is page,
+            timeout_ms=5000,
+        )
         target = self.window.findChild(QtWidgets.QWidget, focus_name)
-        if self.window.workspace_tabs.currentWidget() is not page:
-            raise RuntimeError(action.objectName() + " shortcut did not activate its page")
         if target is None or not target.isVisibleTo(self.window):
             raise RuntimeError(focus_name + " is not visible after workspace shortcut")
         if not target.hasFocus():
