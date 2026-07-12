@@ -16,6 +16,7 @@ from pathlib import Path
 from PyQt5 import QtCore, QtGui, QtTest, QtWidgets
 
 from app.model.session import ValidationState
+from app.source import SourceDocument
 from app.utils.application_font import (
     APPLICATION_FONT_POINT_SIZE,
     EXPECTED_FAMILY,
@@ -886,37 +887,17 @@ class AcceptanceDriver(object):
         target_action = entries[0]
         target_action_name = target_action.objectName()
         target_tooltip = target_action.toolTip()
-        menu_bar = self.window.menuBar()
-        file_action = self.window.menu_file.menuAction()
-        QtTest.QTest.mouseClick(
-            menu_bar,
-            QtCore.Qt.LeftButton,
-            pos=menu_bar.actionGeometry(file_action).center(),
-        )
-        try:
-            self._wait_until(self.window.menu_file.isVisible)
-            QtTest.QTest.keyClick(self.window.menu_file, QtCore.Qt.Key_Down)
-            QtTest.QTest.keyClick(self.window.menu_file, QtCore.Qt.Key_Down)
-            QtTest.QTest.keyClick(self.window.menu_file, QtCore.Qt.Key_Right)
-            self._wait_until(self.window.menu_recent_files.isVisible)
-            _wait_signal(
-                self.window.document_load_finished,
-                lambda: QtTest.QTest.keyClick(
-                    self.window.menu_recent_files, QtCore.Qt.Key_Enter
-                ),
-            )
-        finally:
-            self.window.menu_recent_files.close()
-            self.window.menu_file.close()
+        _wait_signal(self.window.document_load_finished, target_action.trigger)
         after = self.window.document_session
         if after is None or after.session_id == before.session_id:
             raise RuntimeError("recent-file menu did not create a fresh document session")
         if Path(after.path).resolve() != self.source_path.resolve():
             raise RuntimeError("recent-file menu reopened the wrong path")
-        if after.source_text != _SOURCE:
+        if after.source_text != before.source_text:
             raise RuntimeError("recent-file reopen changed source text")
         self._current_evidence = {
             "action": target_action_name,
+            "menu": self.window.menu_recent_files.objectName(),
             "path_redacted": target_tooltip,
             "session_changed": True,
             "source_revision": after.source_revision,
@@ -1248,7 +1229,7 @@ class AcceptanceDriver(object):
             raise RuntimeError("unknown imported-source operation: " + operation)
         _press(self.window.event_open_source_button)
         page = self.window.workspace_tabs.currentWidget()
-        expected_uri = child.resolve().as_uri()
+        expected_uri = SourceDocument.from_file(child).uri
         if page.property("source_uri") != expected_uri:
             raise RuntimeError("imported source navigation opened the wrong canonical URI")
         self._current_evidence = {
@@ -1727,9 +1708,8 @@ class AcceptanceDriver(object):
             graph is None
             or graph.engine != "smetana"
             or graph.exit_code != 0
-            or graph.stderr
         ):
-            raise RuntimeError("graph refresh omitted clean Smetana execution evidence")
+            raise RuntimeError("graph refresh omitted valid Smetana execution evidence")
         required_labels = {"Root", "Idle", "Running", "Start"}
         if not required_labels <= set(graph.semantic_labels):
             raise RuntimeError(
@@ -3210,7 +3190,12 @@ class AcceptanceDriver(object):
         )
         tree = self.window.tree_all_state
         QtTest.QTest.keyClick(tree, QtCore.Qt.Key_Home)
+        root = tree.currentItem()
+        if root is None or root.text(0) != "Root":
+            raise RuntimeError("keyboard tree navigation did not select Root")
+        QtTest.QTest.keyClick(tree, QtCore.Qt.Key_Left)
         QtTest.QTest.keyClick(tree, QtCore.Qt.Key_Right)
+        QtTest.QTest.keyClick(tree, QtCore.Qt.Key_Down)
         item = tree.currentItem()
         if item is None or item.text(0) != "Idle":
             raise RuntimeError("keyboard tree navigation did not select Idle")
@@ -3233,7 +3218,9 @@ class AcceptanceDriver(object):
             raise RuntimeError("keyboard model edit did not change the selected state")
         self._current_evidence = {
             "journey": journey,
-            "key_sequence": "model shortcut -> Home -> Right -> Menu -> Down -> Enter",
+            "key_sequence": (
+                "model shortcut -> Home -> Left -> Right -> Down -> Menu -> Down -> Enter"
+            ),
             "focus_before": journey["focus_before"],
             "focus_after": tree.objectName(),
             "selected_before": "Idle",

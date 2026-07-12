@@ -87,11 +87,13 @@ def test_graph_toolbar_focusable_controls_do_not_overlap(qtbot, tmp_path):
     ]
     assert all(control.isVisibleTo(window) for control in controls)
     for left, right in zip(controls, controls[1:]):
-        assert not left.geometry().intersects(right.geometry()), (
+        intersection = left.geometry().intersected(right.geometry())
+        assert intersection.width() <= 1 or intersection.height() <= 1, (
             left.objectName(),
             left.geometry(),
             right.objectName(),
             right.geometry(),
+            intersection,
         )
 
 
@@ -102,7 +104,10 @@ def test_property_inspector_renders_redaction_marker_as_plain_text(qtbot, tmp_pa
     window._update_property_inspector(root)
 
     assert window.property_source_label.textFormat() == QtCore.Qt.PlainText
-    assert "<TEMP>" in window.property_source_label.text()
+    assert any(
+        marker in window.property_source_label.text()
+        for marker in ("<TEMP>", "<HOME>")
+    )
     assert str(tmp_path) not in window.property_source_label.text()
 
 

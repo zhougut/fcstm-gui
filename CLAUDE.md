@@ -138,6 +138,10 @@ always expose the same contract.
   `windows`, or `cocoa`) in both package and fresh stages. Windows Qt can
   access-violate when a real modal message box is driven through the offscreen
   plugin; an offscreen pass is not evidence for the native Windows path.
+- Source-mode Linux xcb needs the complete Qt host library set on the build
+  runner. Keep that installation confined to Stage 1; Stage 2 must continue to
+  install only the display host/JRE so the frozen artifact, not apt, supplies
+  its bundled xcb/GL/font dependencies.
 - Size pytest timeouts for the complete parameterized acceptance duration.
   A per-test timeout shorter than the known 140-item run produces a false
   infrastructure failure even when all preceding items pass; keep the inner
@@ -188,6 +192,33 @@ always expose the same contract.
   non-empty. macOS Java may emit the exact software-GL warning while producing
   valid Smetana output; allow only an explicit reviewed warning line, preserve
   it in execution metadata, and keep every unknown stderr line fail-closed.
+- Cairo PDF object layout varies by platform; macOS may compress the page
+  dictionary so `/MediaBox` is not visible as raw bytes. Bind PDF to the
+  semantically validated source SVG, require PDF magic/startxref/EOF and a
+  meaningful size, and validate dimensions when MediaBox is directly present.
+- Qt rectangle intersection semantics include a shared one-pixel edge on some
+  styles. Treat width or height <= 1 as boundary contact, not control overlap,
+  while keeping every larger intersection fail-closed.
+- Native Qt platforms ignore synthetic mouse clicks on hidden widgets more
+  consistently than offscreen. Widget tests must show and process the target
+  before clicking; a hidden-widget click is not a user-path test.
+- GitHub-hosted Windows GUI sessions may start at roughly 1024x768 and clamp a
+  requested 1280x720 window. Set and log a 1920x1080 native display resolution
+  before source and fresh acceptance; otherwise the geometry result describes
+  the runner clamp rather than the requested viewport.
+- File URI and newline facts are platform-normalized by the application source
+  layer. Cross-platform acceptance must compare `SourceDocument.uri` and the
+  active session's loaded text baseline, not reconstruct URIs with `Path.as_uri`
+  or compare a reopened document to a hard-coded LF literal.
+- A temporary directory can be nested under the user home on Windows. Redaction
+  assertions accept either `<TEMP>` or `<HOME>` as safe output while still
+  rejecting the raw path.
+- macOS owns the application menu bar globally, so synthetic clicks against a
+  window-local `QMenuBar.actionGeometry()` do not prove or reliably open the
+  native menu. For non-keyboard acceptance, resolve the real recent-file
+  `QAction` from its product `QMenu`, trigger that action, and still gate on the
+  asynchronous load signal plus the new session/path/text facts. Never replace
+  this with a direct document-service or load-slot call.
 - Give every acceptance case a stable parameterized id and isolated fixture or
   proven reset. One failed GUI path must not poison later cases or collapse
   multiple unexecuted capabilities into one broad passing item.

@@ -28,7 +28,7 @@ class GraphWorkspace(QtWidgets.QWidget):
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         controls = QtWidgets.QHBoxLayout()
-        controls.setSpacing(8)
+        controls.setSpacing(6)
         self.refresh_button = self._button("刷新", "graph_refresh_button")
         self.fit_button = self._button("适应", "graph_fit_button")
         self.actual_button = self._button("100%", "graph_actual_button")
@@ -36,8 +36,8 @@ class GraphWorkspace(QtWidgets.QWidget):
         self.export_combo = QtWidgets.QComboBox(self)
         self.export_combo.setObjectName("graph_export_combo")
         self.export_combo.addItems(["plantuml", "png", "svg", "pdf"])
-        self.export_combo.setFixedWidth(100)
-        self.export_combo.setMinimumContentsLength(8)
+        self.export_combo.setFixedWidth(88)
+        self.export_combo.setMinimumContentsLength(6)
         self.export_combo.setSizeAdjustPolicy(
             QtWidgets.QComboBox.AdjustToMinimumContentsLengthWithIcon
         )
@@ -79,7 +79,7 @@ class GraphWorkspace(QtWidgets.QWidget):
     def _button(self, text, name):
         button = QtWidgets.QPushButton(text, self)
         button.setObjectName(name)
-        button.setFixedWidth(64)
+        button.setFixedWidth(56)
         button.setAccessibleName(text)
         button.setToolTip(text)
         return button

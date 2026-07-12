@@ -64,13 +64,33 @@ jobs:
         shell: bash
         run: echo "MINGW_BIN=$(cygpath -u '${{ steps.msys2.outputs.msys2-location }}\mingw64\bin')" >> "$GITHUB_ENV"
 
+      - name: Set Windows native GUI resolution
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          Set-DisplayResolution -Width 1920 -Height 1080 -Force
+          $display = Get-CimInstance Win32_VideoController |
+            Where-Object { $_.CurrentHorizontalResolution -and $_.CurrentVerticalResolution } |
+            Select-Object -First 1
+          $display | Select-Object CurrentHorizontalResolution, CurrentVerticalResolution
+          if ($display.CurrentHorizontalResolution -lt 1920 -or
+              $display.CurrentVerticalResolution -lt 1080) {
+            throw "Windows display resolution is below 1920x1080"
+          }
+
       - name: Install Linux build runtime
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential xvfb \
-            libxkbcommon-x11-0 libxcb-xinerama0 libxcb-cursor0 libegl1 libgl1
+            libxkbcommon-x11-0 libxkbcommon0 \
+            libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
+            libxcb-render-util0 libxcb-shape0 libxcb-sync1 libxcb-xfixes0 \
+            libxcb-xinerama0 libxcb-xkb1 libxcb-cursor0 \
+            libegl1 libgl1 libglx-mesa0 libopengl0 \
+            libfontconfig1 libdbus-1-3 libnss3 \
+            libxcomposite1 libxdamage1 libxrandr2 libxtst6 x11-utils
 
       - name: Install dependencies and generate UI
         shell: bash
@@ -335,6 +355,20 @@ jobs:
         with:
           distribution: temurin
           java-version: '11'
+
+      - name: Set Windows native GUI resolution
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          Set-DisplayResolution -Width 1920 -Height 1080 -Force
+          $display = Get-CimInstance Win32_VideoController |
+            Where-Object { $_.CurrentHorizontalResolution -and $_.CurrentVerticalResolution } |
+            Select-Object -First 1
+          $display | Select-Object CurrentHorizontalResolution, CurrentVerticalResolution
+          if ($display.CurrentHorizontalResolution -lt 1920 -or
+              $display.CurrentVerticalResolution -lt 1080) {
+            throw "Windows display resolution is below 1920x1080"
+          }
 
       - name: Confirm Java runtime
         shell: bash

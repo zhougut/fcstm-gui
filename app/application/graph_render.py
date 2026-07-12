@@ -190,9 +190,16 @@ def _validate_binary_output(kind: str, data: bytes) -> None:
             rb"([-+0-9.]+)\s+([-+0-9.]+)\s*\]",
             data,
         )
-        if media_box is None:
+        structurally_complete = (
+            len(data) >= 512
+            and b"startxref" in data
+            and data.rstrip().endswith(b"%%EOF")
+        )
+        if media_box is None and not structurally_complete:
             raise GraphRenderError("PDF graph output has no page dimensions")
-        if float(media_box.group(1)) <= 1 or float(media_box.group(2)) <= 1:
+        if media_box is not None and (
+            float(media_box.group(1)) <= 1 or float(media_box.group(2)) <= 1
+        ):
             raise GraphRenderError("PDF graph output has invalid dimensions")
     elif kind != "svg":
         raise GraphRenderError("unsupported graph format: " + str(kind))

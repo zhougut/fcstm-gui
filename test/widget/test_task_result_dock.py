@@ -414,6 +414,8 @@ def test_full_path_display_requires_explicit_opt_in_and_persists_setting(
     settings = _settings(tmp_path)
     dock = TaskResultDock(center, settings=settings)
     qtbot.addWidget(dock)
+    dock.show()
+    qtbot.wait(10)
 
     assert not dock.show_full_paths_action.isChecked()
     assert str(workspace) not in dock.detail.toPlainText()

@@ -144,7 +144,11 @@ def test_smetana_renders_real_model_without_graphviz(
     assert result.engine == "smetana"
     assert result.renderer in {"java-jar-pipe", "java-jar-pipe+cairosvg"}
     assert result.exit_code == 0
-    assert result.stderr == ""
+    assert all(
+        line in graph_render._BENIGN_STDERR_LINES
+        for line in result.stderr.splitlines()
+        if line
+    )
     assert result.executions
     assert all(item.exit_code == 0 for item in result.executions)
     assert all(item.engine == "smetana" for item in result.executions)
