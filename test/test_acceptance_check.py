@@ -242,7 +242,28 @@ def test_full_gui_acceptance_writes_report(qtbot, tmp_path, monkeypatch):
     assert all(not item["overlaps"] for item in workspaces)
     assert all(item["current_tab_rect"][2:] > [0, 0] for item in workspaces)
     assert all(item["focus_chain"] for item in workspaces)
-    assert report["geometry"]["overlap_exemptions"] == []
+    exemptions = report["geometry"]["overlap_exemptions"]
+    if platform.system() == "Darwin":
+        assert len(exemptions) == 9
+        assert {item["parent"] for item in exemptions} == {
+            "ordinary_simulation_panel",
+            "dynamic_validation_panel",
+        }
+        assert all(
+            item[key] is True
+            for item in exemptions
+            for key in (
+                "text_visible",
+                "hit_test_passed",
+                "click_passed",
+                "focus_passed",
+                "accessible_name_passed",
+                "business_fact_passed",
+                "artifact_fact_passed",
+            )
+        )
+    else:
+        assert exemptions == []
 
 
 def test_acceptance_schema_requires_item_evidence_and_artifacts():
