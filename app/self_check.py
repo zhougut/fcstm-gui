@@ -1,6 +1,8 @@
 """Fault-tolerant command-line diagnostics used by users and packaged builds."""
 from __future__ import print_function
 import importlib
+import copy
+import json
 import os
 import platform
 import pkgutil
@@ -8,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import traceback
 
 RESET = '\033[0m'
@@ -80,38 +83,55 @@ def _check_pyfcstm_roundtrip():
     return '{} AST chars, {} PlantUML chars'.format(len(ast_text), len(plantuml))
 
 
-def _check_z3_solver():
+def _check_z3_integer_sat():
     import z3
     value = z3.Int('fcstm_self_check')
     sat_solver = z3.Solver()
     sat_solver.add(value > 5, value < 10)
     if sat_solver.check() != z3.sat or not 5 < sat_solver.model()[value].as_long() < 10:
         raise RuntimeError('Z3 integer SAT/model check failed')
+    return 'integer SAT/model OK'
 
+
+def _check_z3_unsat():
+    import z3
+    value = z3.Int('fcstm_unsat')
     unsat_solver = z3.Solver()
     unsat_solver.add(value > 2, value < 2)
     if unsat_solver.check() != z3.unsat:
         raise RuntimeError('Z3 UNSAT check failed')
+    return 'UNSAT OK'
 
+
+def _check_z3_real():
+    import z3
     real = z3.Real('fcstm_real')
     real_solver = z3.Solver()
     real_solver.add(real * 3 == 1)
     if real_solver.check() != z3.sat or str(real_solver.model()[real]) != '1/3':
         raise RuntimeError('Z3 real arithmetic check failed')
+    return 'exact real 1/3 OK'
 
+
+def _check_z3_bitvector():
+    import z3
     bits = z3.BitVec('fcstm_bits', 8)
     bit_solver = z3.Solver()
     bit_solver.add((bits & 0x0f) == 0x0a, bits == 0x2a)
     if bit_solver.check() != z3.sat or bit_solver.model()[bits].as_long() != 0x2a:
         raise RuntimeError('Z3 bit-vector check failed')
+    return '8-bit model 0x2a OK'
 
+
+def _check_z3_optimize():
+    import z3
     optimum = z3.Int('fcstm_optimum')
     optimizer = z3.Optimize()
     optimizer.add(optimum >= 0, optimum <= 20)
     optimizer.maximize(optimum)
     if optimizer.check() != z3.sat or optimizer.model()[optimum].as_long() != 20:
         raise RuntimeError('Z3 Optimize/maximize check failed')
-    return '5 solve scenarios OK (z3 {})'.format(z3.get_version_string())
+    return 'Optimize maximum 20 OK'
 
 
 def _check_qt_native_widgets():
@@ -297,13 +317,274 @@ def _check_pygments_highlight():
     return '{} HTML chars'.format(len(output))
 
 
+_BEHAVIOR_SOURCE = '''
+def int x = 0;
+def int y = 1;
+state Root {
+    state A { during { x = x + 1; } }
+    state B;
+    [*] -> A;
+    A -> B :: Go effect { x = x + 5; }
+    B -> [*] :: Stop;
+}
+'''
+
+
+def _check_loader_text():
+    from pyfcstm.model import load_state_machine_from_text
+    model = load_state_machine_from_text(_BEHAVIOR_SOURCE)
+    if model.root_state.name != 'Root':
+        raise RuntimeError('text loader returned the wrong root state')
+    return 'root Root loaded from text'
+
+
+def _check_loader_file():
+    from pyfcstm.model import load_state_machine_from_file
+    with tempfile.TemporaryDirectory() as directory:
+        path = os.path.join(directory, 'model.fcstm')
+        with open(path, 'w', encoding='utf-8') as stream:
+            stream.write(_BEHAVIOR_SOURCE)
+        model = load_state_machine_from_file(path)
+    if model.root_state.name != 'Root':
+        raise RuntimeError('file loader returned the wrong root state')
+    return 'root Root loaded from file'
+
+
+def _check_loader_syntax_failure():
+    from pyfcstm.model import load_state_machine_from_text
+    try:
+        load_state_machine_from_text('state Broken { state ; }')
+    except BaseException as error:
+        text = str(error).lower()
+        if not any(item in text for item in ('line', 'column', 'syntax')):
+            raise RuntimeError('syntax error omitted position: ' + str(error))
+        return type(error).__name__ + ' with position'
+    raise RuntimeError('invalid syntax was accepted')
+
+
+def _check_loader_model_failure():
+    from pyfcstm.model import load_state_machine_from_text
+    try:
+        load_state_machine_from_text(
+            'state Root { state A; [*] -> Missing; }'
+        )
+    except BaseException as error:
+        if 'Missing' not in str(error):
+            raise RuntimeError('model validation omitted invalid target')
+        return type(error).__name__ + ' for missing target'
+    raise RuntimeError('invalid model structure was accepted')
+
+
+def _check_inspect_warning():
+    from pyfcstm.diagnostics.inspect import inspect_model
+    from pyfcstm.model import load_state_machine_from_text
+    model = load_state_machine_from_text(
+        'state Root { state A; [*] -> A; }'
+    )
+    report = inspect_model(model)
+    warnings = [item for item in report.diagnostics if item.severity == 'warning']
+    if not warnings or not all(item.code and item.span for item in warnings):
+        raise RuntimeError('inspect warning/code/span not available')
+    return '{} warning(s), first {}'.format(len(warnings), warnings[0].code)
+
+
+def _formula_check(kind, text, expected_valid):
+    from app.application.formulas import (
+        FormulaKind,
+        FormulaValidationRequest,
+        FormulaValidationService,
+        FormulaValidationStatus,
+    )
+    result = FormulaValidationService().validate(
+        FormulaValidationRequest(
+            kind=FormulaKind(kind),
+            text=text,
+            source_revision=1,
+            request_token='self-check-' + kind,
+            variable_definitions='def int x = 0;\ndef int y = 1;',
+        )
+    )
+    expected = (
+        FormulaValidationStatus.VALID
+        if expected_valid
+        else FormulaValidationStatus.INVALID
+    )
+    if result.status is not expected:
+        raise RuntimeError(
+            '{} formula expected {}, got {}: {}'.format(
+                kind, expected.value, result.status.value, result.message
+            )
+        )
+    if not expected_valid and result.location is None:
+        raise RuntimeError(kind + ' invalid result omitted location')
+    return '{} at revision {}'.format(result.status.value, result.source_revision)
+
+
+def _simulation_session():
+    from app.application.simulation import SimulationService
+    service = SimulationService()
+    return service, service.start(
+        _BEHAVIOR_SOURCE,
+        source_uri='self-check://simulation',
+        source_revision=1,
+        dependency_fingerprint='self-check-model',
+    )
+
+
+def _check_simulation_initialization():
+    service, session = _simulation_session()
+    snapshot = session.snapshot()
+    if snapshot.cycle != 0 or snapshot.vars != {'x': 0, 'y': 1}:
+        raise RuntimeError('simulation initialization snapshot is wrong')
+    return type(session.runtime).__name__ + ' cycle 0'
+
+
+def _check_simulation_cycles():
+    service, session = _simulation_session()
+    first = service.cycle(session)
+    second = service.cycle(session, events='Go')
+    if (
+        first.snapshot.state_path != ('Root', 'A')
+        or second.snapshot.state_path != ('Root', 'B')
+        or second.snapshot.vars['x'] != 6
+        or second.consumed_events != ('Root.A.Go',)
+    ):
+        raise RuntimeError('multiple simulation cycles returned wrong state/variables')
+    return '2 cycles, Root.B, x=6'
+
+
+def _check_simulation_end():
+    service, session = _simulation_session()
+    service.cycle(session)
+    service.cycle(session, events='Go')
+    ended = service.cycle(session, events='Stop')
+    if not ended.snapshot.ended or ended.snapshot.state_path:
+        raise RuntimeError('simulation did not reach terminal state')
+    return 'terminal state reached at cycle {}'.format(ended.snapshot.cycle)
+
+
+def _check_simulation_exception_rollback():
+    from app.application.simulation import SimulationService
+    source = '''
+def int x = 0;
+def int y = 1;
+state Root {
+ state A;
+ state B;
+ [*] -> A;
+ A -> B :: Boom effect { x = x + 1; y = 1 / 0; }
+}
+'''
+    service = SimulationService()
+    session = service.start(source, 'self-check://rollback', 1, 'rollback')
+    service.cycle(session)
+    before = session.snapshot()
+    result = service.cycle(session, events='Boom')
+    if (
+        result.error is None
+        or result.error.cause_type != 'ZeroDivisionError'
+        or result.rollback_preserved is not True
+        or result.snapshot != before
+    ):
+        raise RuntimeError('simulation exception/cause/rollback evidence is wrong')
+    return '{} caused by {}, rollback preserved'.format(
+        result.error.type, result.error.cause_type
+    )
+
+
+def _check_dynamic_case(case_id):
+    from app.application.dynamic_validation import DynamicValidationService
+    report = DynamicValidationService().run_packaged_case(case_id)
+    if report.status != 'passed' or not report.steps:
+        raise RuntimeError(case_id + ' did not pass')
+    return '{} step(s), scenario {}'.format(
+        len(report.steps), report.scenario_sha256[:12]
+    )
+
+
+def _mutated_dynamic_report():
+    from app.application.dynamic_validation import DynamicValidationService
+    service = DynamicValidationService()
+    case_id = 'design_validation_failure_multilevel_transition'
+    scenario_path = service.resource_dir / (case_id + '.json')
+    payload = json.loads(scenario_path.read_text(encoding='utf-8'))
+    payload = copy.deepcopy(payload)
+    payload['case_id'] = 'self_check_mutation'
+    payload['steps'][-1]['expected']['state'] = 'Root.Mutated'
+    with tempfile.TemporaryDirectory() as directory:
+        model_name = payload['model_file']
+        source = service.resource_dir / model_name
+        target = os.path.join(directory, model_name)
+        with open(target, 'wb') as stream:
+            stream.write(source.read_bytes())
+        return service.run_scenario(payload, base_dir=directory)
+
+
+def _check_dynamic_mutation():
+    report = _mutated_dynamic_report()
+    if report.status != 'mismatch' or not any(step.diffs for step in report.steps):
+        raise RuntimeError('dynamic mutation was not detected')
+    return 'expected-state mutation detected'
+
+
+def _check_dynamic_restore():
+    _mutated_dynamic_report()
+    return _check_dynamic_case('design_validation_failure_multilevel_transition')
+
+
+def _check_dynamic_provenance():
+    from app.application.dynamic_validation import DynamicValidationService
+    report = DynamicValidationService().verify_packaged_provenance()
+    if report.status != 'passed' or len(report.resources) != 8:
+        raise RuntimeError('dynamic validation provenance mismatch')
+    return '8 resource hashes match upstream provenance'
+
+
+def _check_template_list():
+    from app.application.generation import GenerationService
+    names = [item.name for item in GenerationService().list_templates()]
+    expected = ['c', 'c_poll', 'cpp', 'cpp_poll', 'python']
+    if names != expected:
+        raise RuntimeError('template inventory mismatch: {!r}'.format(names))
+    return ', '.join(names)
+
+
+def _check_template_info(template_name):
+    from pyfcstm.template import get_template_info
+    info = get_template_info(template_name)
+    if info.get('name') != template_name or not info.get('language') or not info.get('description'):
+        raise RuntimeError(template_name + ' metadata is incomplete')
+    return '{} / {}'.format(info['title'], info['language'])
+
+
+def _check_template_extract(template_name):
+    from pyfcstm.template import extract_template
+    with tempfile.TemporaryDirectory() as directory:
+        path = extract_template(template_name, directory)
+        if not os.path.isfile(os.path.join(path, 'config.yaml')):
+            raise RuntimeError(template_name + ' extraction omitted config.yaml')
+        count = sum(len(names) for _, _, names in os.walk(path))
+    if count < 2:
+        raise RuntimeError(template_name + ' extracted too few files')
+    return '{} extracted files'.format(count)
+
+
 def _checks():
     checks = [('python runtime', _check_python)]
     for name in ('PyQt5', 'qtpy', 'qtawesome', 'qtmodern', 'openpyxl', 'docx', 'pyfcstm'):
         checks.append(('import ' + name, lambda name=name: _check_import(name)))
     checks.extend([('java executable', _check_java), ('plantuml.jar', _check_plantuml_jar),
+                   ('loader text success', _check_loader_text),
+                   ('loader file success', _check_loader_file),
+                   ('loader syntax failure position', _check_loader_syntax_failure),
+                   ('loader model assembly failure', _check_loader_model_failure),
+                   ('inspect warning/code/span', _check_inspect_warning),
                    ('pyfcstm DSL/model/PlantUML roundtrip', _check_pyfcstm_roundtrip),
-                   ('pyfcstm simulation runtime', _check_pyfcstm_simulation),
+                   ('simulation runtime construction', _check_pyfcstm_simulation),
+                   ('simulation initialization', _check_simulation_initialization),
+                   ('simulation multiple cycles state variables', _check_simulation_cycles),
+                   ('simulation terminal state', _check_simulation_end),
+                   ('simulation exception cause rollback', _check_simulation_exception_rollback),
                    ('pyfcstm invalid syntax diagnostics', _check_invalid_diagnostics),
                    ('pyfcstm inspect human', lambda: _check_inspect('human')),
                    ('pyfcstm inspect json', lambda: _check_inspect('json')),
@@ -313,13 +594,49 @@ def _checks():
                    ('pyfcstm visualize PDF', lambda: _check_visualize('pdf')),
                    ('pyfcstm batch simulation CLI', _check_simulate_cli),
                    ('pyfcstm Pygments highlighting', _check_pygments_highlight),
-                   ('Z3 SAT solver', _check_z3_solver),
+                   ('Z3 integer SAT and model', _check_z3_integer_sat),
+                   ('Z3 UNSAT', _check_z3_unsat),
+                   ('Z3 exact real', _check_z3_real),
+                   ('Z3 bit-vector', _check_z3_bitvector),
+                   ('Z3 Optimize maximize', _check_z3_optimize),
                    ('Qt application', _check_qt_application),
                    ('Qt native widgets and assets', _check_qt_native_widgets),
                    ('XLSX and DOCX roundtrips', _check_office_roundtrips),
                    ('PlantUML Java PNG render', _check_plantuml_render),
-                   ('main GUI window lifecycle', _check_main_window)])
+                   ('main GUI window lifecycle', _check_main_window),
+                   ('packaged template inventory', _check_template_list),
+                   ('dynamic provenance resource hashes', _check_dynamic_provenance),
+                   ('dynamic mutation mismatch', _check_dynamic_mutation),
+                   ('dynamic restored resource rerun', _check_dynamic_restore)])
+    for kind, valid_text, invalid_text in (
+        ('logical', 'x > 0 && y < 3', 'x +'),
+        ('numeric', 'x * 2 + 1', 'x > 0'),
+        ('effect', 'x = x + 1;', 'x = ;'),
+        ('lifecycle', 'x = x + 1;', 'x = x + 1;\nx = ;'),
+    ):
+        checks.append((
+            'formula {} valid'.format(kind),
+            lambda kind=kind, text=valid_text: _formula_check(kind, text, True),
+        ))
+        checks.append((
+            'formula {} invalid'.format(kind),
+            lambda kind=kind, text=invalid_text: _formula_check(kind, text, False),
+        ))
+    for case_id in (
+        'design_evented_pseudo_chain_invalid_then_valid',
+        'design_validation_failure_multilevel_transition',
+        'expression_failure_transition_guard_raises_expression_error',
+        'pseudo_self_loop_step_limit_raises_dfs_error',
+    ):
+        checks.append((
+            'dynamic case ' + case_id,
+            lambda case_id=case_id: _check_dynamic_case(case_id),
+        ))
     for template_name in ('python', 'c', 'c_poll', 'cpp', 'cpp_poll'):
+        checks.append(('pyfcstm template info ' + template_name,
+                       lambda template_name=template_name: _check_template_info(template_name)))
+        checks.append(('pyfcstm extract template ' + template_name,
+                       lambda template_name=template_name: _check_template_extract(template_name)))
         checks.append(('pyfcstm generate template ' + template_name,
                        lambda template_name=template_name: _check_template(template_name)))
     try:
@@ -332,33 +649,115 @@ def _checks():
     return checks
 
 
-def run_self_check():
+def _result_kind(name):
+    return 'module-closure' if name.startswith('import ') else 'behavior'
+
+
+def _result_group(name):
+    lowered = name.lower()
+    for group in (
+        'dynamic', 'simulation', 'formula', 'z3', 'template', 'loader',
+        'inspect', 'plantuml', 'qt', 'office', 'gui',
+    ):
+        if group in lowered:
+            return group
+    return 'runtime'
+
+
+def _write_json_report(path, payload):
+    target = os.path.abspath(path)
+    parent = os.path.dirname(target)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    temporary = target + '.tmp'
+    try:
+        with open(temporary, 'w', encoding='utf-8') as stream:
+            json.dump(payload, stream, ensure_ascii=False, sort_keys=True, indent=2)
+            stream.write('\n')
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, target)
+    finally:
+        try:
+            os.remove(temporary)
+        except OSError:
+            pass
+
+
+def run_self_check(json_report=None):
     try:
         if os.name == 'nt':
             import colorama
             colorama.just_fix_windows_console()
     except BaseException:
         pass
+    started_at = time.time()
     results = []
     try:
         checks = _checks()
     except BaseException as exc:
         checks = []
-        results.append(('check discovery', False, repr(exc)))
+        results.append({
+            'name': 'check discovery',
+            'group': 'runtime',
+            'kind': 'behavior',
+            'status': 'failed',
+            'duration_ms': 0,
+            'detail': repr(exc),
+        })
     print(_color(CYAN, 'fcstm-gui self-check: running {} checks'.format(len(checks))))
     for index, (name, check) in enumerate(checks, 1):
+        check_started = time.time()
         try:
             detail = check()
-            results.append((name, True, str(detail)))
+            results.append({
+                'name': name,
+                'group': _result_group(name),
+                'kind': _result_kind(name),
+                'status': 'passed',
+                'duration_ms': int((time.time() - check_started) * 1000),
+                'detail': str(detail),
+            })
             print('[{:02d}/{:02d}] {}: {} ({})'.format(index, len(checks), name, _color(GREEN, 'OK'), detail))
         except BaseException as exc:
-            results.append((name, False, repr(exc)))
+            results.append({
+                'name': name,
+                'group': _result_group(name),
+                'kind': _result_kind(name),
+                'status': 'failed',
+                'duration_ms': int((time.time() - check_started) * 1000),
+                'detail': repr(exc),
+            })
             print('[{:02d}/{:02d}] {}: {} ({!r})'.format(index, len(checks), name, _color(RED, 'FAIL'), exc))
             traceback.print_exc()
-    failures = [item for item in results if not item[1]]
+    failures = [item for item in results if item['status'] == 'failed']
     passed = len(results) - len(failures)
     status = _color(GREEN if not failures else RED, 'PASSED' if not failures else 'FAILED')
     print(_color(CYAN, 'fcstm-gui self-check:') + ' {} OK / {} FAIL - {}'.format(passed, len(failures), BOLD + status + RESET))
+    report = {
+        'schema': 'fcstm-gui.self-check-report',
+        'version': 1,
+        'status': 'passed' if not failures else 'failed',
+        'started_at': started_at,
+        'duration_ms': int((time.time() - started_at) * 1000),
+        'platform': {
+            'system': platform.system(),
+            'release': platform.release(),
+            'machine': platform.machine(),
+            'python': platform.python_version(),
+            'frozen': bool(getattr(sys, 'frozen', False)),
+        },
+        'counts': {
+            'total': len(results),
+            'passed': passed,
+            'failed': len(failures),
+            'module_closure': sum(item['kind'] == 'module-closure' for item in results),
+            'behavior': sum(item['kind'] == 'behavior' for item in results),
+        },
+        'results': results,
+    }
+    if json_report:
+        _write_json_report(json_report, report)
     return 1 if failures else 0
 
 

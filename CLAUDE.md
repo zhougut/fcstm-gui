@@ -111,6 +111,22 @@ always expose the same contract.
 - Resolve bundled resources from `_MEIPASS` when frozen and from the module's
   repository/package root in source mode. Never assume the process cwd is the
   project root.
+- A Qt completion signal can belong to a superseded attempt on the same
+  channel. Acceptance drivers must filter by session id and source revision;
+  merely waiting for the next signal can race a later product task.
+- Programmatic projection clearing must stop pending form timers and suppress
+  form `textChanged` handlers. Otherwise a delayed form commit can create a
+  content-identical revision and correctly trip every artifact publication
+  guard.
+- Treat report JSON, logs, screenshots, and exports as first-class CI
+  evidence. Produce them separately for source, onedir, onefile, and fresh
+  verification instead of relying on console success text.
+- A generated file inventory is not runtime evidence. Execute the Python
+  runtime and compile, link, and run C, C poll, C++, and C++ poll outputs on
+  every native build runner.
+- Exercise GUI acceptance across the cross product of 1280x720 and 1920x1080
+  with Qt scale factors 1, 1.5, and 2. Inspect representative pixels in
+  addition to checking widget geometry numerically.
 
 ## Required Local Evidence
 

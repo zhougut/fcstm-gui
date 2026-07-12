@@ -136,8 +136,16 @@ class _StampedTaskToken(object):
 
     def raise_if_cancelled(self):
         self._token.raise_if_cancelled()
-        if not self._stamp_is_current():
-            raise TaskStaleError("task stamp became stale before artifact publication")
+        current = self._stamp_is_current()
+        if isinstance(current, tuple):
+            valid, detail = current
+        else:
+            valid, detail = bool(current), ""
+        if not valid:
+            suffix = ": " + detail if detail else ""
+            raise TaskStaleError(
+                "task stamp became stale before artifact publication" + suffix
+            )
 
 
 class AppMainWindow(QMainWindow, UIMainWindow):
@@ -630,13 +638,16 @@ class AppMainWindow(QMainWindow, UIMainWindow):
             "qt_dockwidget_closebutton": "关闭面板",
         }
         for button in self.findChildren(QtWidgets.QAbstractButton):
-            if button.icon().isNull():
-                continue
+            parent = button.parentWidget()
+            table_name = ""
+            if isinstance(parent, QtWidgets.QAbstractItemView):
+                table_name = parent.accessibleName() or parent.objectName()
             fallback = (
                 button.text()
                 or button.toolTip()
                 or internal_names.get(button.objectName())
                 or button.objectName()
+                or (table_name + "全选" if table_name else "")
                 or "图标按钮"
             )
             if not button.accessibleName():
@@ -1562,11 +1573,17 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self.settings.setValue("recent_files", recent[:10])
 
     def _clear_model_projection(self):
-        self.state_manager = None
-        self.tree_all_state.clear()
-        self.edit_var_def.clear()
-        self.table_transition.setRowCount(0)
-        self.table_lifecycle.setRowCount(0)
+        self._variable_edit_timer.stop()
+        previous = self._setting_projection
+        self._setting_projection = True
+        try:
+            self.state_manager = None
+            self.tree_all_state.clear()
+            self.edit_var_def.clear()
+            self.table_transition.setRowCount(0)
+            self.table_lifecycle.setRowCount(0)
+        finally:
+            self._setting_projection = previous
 
     def _update_document_actions(self):
         session = self.document_session
@@ -3525,17 +3542,36 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         snapshot = self._require_current_snapshot_for_action(summary)
         if snapshot is None:
             return None
+        def stamp_state():
+            current = self.document_session
+            current_snapshot = (
+                current.current_valid_snapshot if current is not None else None
+            )
+            valid = bool(
+                current is not None
+                and current.session_id == session.session_id
+                and current.source_revision == session.source_revision
+                and current_snapshot is not None
+                and current_snapshot.dependency_fingerprint
+                == snapshot.dependency_fingerprint
+            )
+            detail = (
+                "expected session={}/revision={}/dependency={}, "
+                "current session={}/revision={}/dependency={}".format(
+                    session.session_id,
+                    session.source_revision,
+                    snapshot.dependency_fingerprint,
+                    getattr(current, "session_id", None),
+                    getattr(current, "source_revision", None),
+                    getattr(current_snapshot, "dependency_fingerprint", None),
+                )
+            )
+            return valid, detail
+
         def guarded_work(token):
             guarded = _StampedTaskToken(
                 token,
-                lambda: bool(
-                    self.document_session is not None
-                    and self.document_session.session_id == session.session_id
-                    and self.document_session.source_revision == session.source_revision
-                    and self.document_session.current_valid_snapshot is not None
-                    and self.document_session.current_valid_snapshot.dependency_fingerprint
-                    == snapshot.dependency_fingerprint
-                ),
+                stamp_state,
             )
             return work(guarded)
 

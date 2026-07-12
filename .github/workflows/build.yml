@@ -1,153 +1,229 @@
-name: Build, Test & Verify
-on: [push, pull_request, workflow_dispatch]
+name: Build & Verify
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - 'dev/**'
+      - 'feat/**'
+      - 'fix/**'
+      - 'ci/**'
+  pull_request:
+  workflow_dispatch:
+
 permissions:
   contents: read
+
 env:
   PYTHON_VERSION: '3.7'
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+  PYFCSTM_EXPECTED_COMMIT: f142a656df43e0b80ed6b7ac63b0696345325646
+
 jobs:
+  # Stage 1 builds both distribution layouts on their native target OS and
+  # exercises source plus frozen products before publication.
   build:
     name: Package (${{ matrix.label }})
     strategy:
       fail-fast: false
       matrix:
         include:
-          - {os: ubuntu-22.04, label: linux-x86_64, executable: fcstm-gui}
-          - {os: windows-2022, label: windows-x86_64, executable: fcstm-gui.exe}
-          - {os: macos-15-intel, label: macos-x86_64, executable: fcstm-gui}
+          - {os: ubuntu-22.04, label: linux-x86_64, executable: fcstm-gui, cc: gcc, cxx: g++}
+          - {os: windows-2022, label: windows-x86_64, executable: fcstm-gui.exe, cc: gcc, cxx: g++}
+          - {os: macos-15-intel, label: macos-x86_64, executable: fcstm-gui, cc: clang, cxx: clang++}
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      - uses: actions/setup-java@v5
+
+      - name: Set up Java 11
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '11'
-      - name: Install Windows Cairo build runtime
+
+      - name: Install Windows Cairo and compiler runtime
         if: runner.os == 'Windows'
         id: msys2
         uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
           update: true
-          install: mingw-w64-x86_64-cairo
-      - name: Expose Windows Cairo build runtime
+          install: >-
+            mingw-w64-x86_64-cairo
+            mingw-w64-x86_64-gcc
+
+      - name: Expose Windows MinGW runtime
         if: runner.os == 'Windows'
         shell: bash
-        run: echo "CAIRO_BIN=$(cygpath -u '${{ steps.msys2.outputs.msys2-location }}\\mingw64\\bin')" >> "$GITHUB_ENV"
+        run: echo "MINGW_BIN=$(cygpath -u '${{ steps.msys2.outputs.msys2-location }}\mingw64\bin')" >> "$GITHUB_ENV"
+
       - name: Install Linux build runtime
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y xvfb libxkbcommon-x11-0 libxcb-xinerama0 libxcb-cursor0 libegl1 libgl1
-      - name: Install and generate UI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential xvfb \
+            libxkbcommon-x11-0 libxcb-xinerama0 libxcb-cursor0 libegl1 libgl1
+
+      - name: Install dependencies and generate UI
         shell: bash
         run: |
-          if [ -n "${CAIRO_BIN:-}" ]; then export PATH="$PATH:$CAIRO_BIN"; fi
+          if [ -n "${MINGW_BIN:-}" ]; then export PATH="$PATH:$MINGW_BIN"; fi
           python -m pip install -r requirements-build.txt -r requirements-test.txt -r requirements.txt
           make ui
+
       - name: Verify pinned pyfcstm source
         shell: bash
         env:
-          PYFCSTM_EXPECTED_COMMIT: f142a656df43e0b80ed6b7ac63b0696345325646
           PYFCSTM_TARGET_LABEL: ${{ matrix.label }}
         run: |
           python - <<'PY'
           import json
           import os
-
           import importlib_metadata
 
           expected = os.environ['PYFCSTM_EXPECTED_COMMIT']
-          label = os.environ['PYFCSTM_TARGET_LABEL']
           distribution = importlib_metadata.distribution('pyfcstm')
-          raw_direct_url = distribution.read_text('direct_url.json')
-
-          direct_url = {}
-          parse_error = None
-          if raw_direct_url:
-              try:
-                  direct_url = json.loads(raw_direct_url)
-              except (TypeError, ValueError) as exc:
-                  parse_error = str(exc)
-
+          direct_url = json.loads(distribution.read_text('direct_url.json') or '{}')
           vcs_info = direct_url.get('vcs_info') or {}
           installed = vcs_info.get('commit_id')
-          requested = vcs_info.get('requested_revision')
-          source_url = direct_url.get('url')
-          passed = installed == expected and parse_error is None
-
-          def shown(value):
-              return value if value is not None else '<missing>'
-
-          summary_lines = [
-              '### pyfcstm dependency provenance ({})'.format(label),
+          summary = '\n'.join([
+              '### pyfcstm dependency provenance ({})'.format(os.environ['PYFCSTM_TARGET_LABEL']),
               '',
-              '- Status: **{}**'.format('PASS' if passed else 'FAIL'),
+              '- Status: **{}**'.format('PASS' if installed == expected else 'FAIL'),
               '- Expected commit: `{}`'.format(expected),
-              '- Installed commit: `{}`'.format(shown(installed)),
-              '- Requested revision: `{}`'.format(shown(requested)),
-              '- Source URL: `{}`'.format(shown(source_url)),
-              '- Evidence: `direct_url.json`',
-          ]
-          if parse_error is not None:
-              summary_lines.append('- Parse error: `{}`'.format(parse_error))
-          summary = '\n'.join(summary_lines) + '\n'
+              '- Installed commit: `{}`'.format(installed or '<missing>'),
+              '- Requested revision: `{}`'.format(vcs_info.get('requested_revision') or '<missing>'),
+              '- Source URL: `{}`'.format(direct_url.get('url') or '<missing>'),
+          ]) + '\n'
           print(summary)
-
-          summary_path = os.environ.get('GITHUB_STEP_SUMMARY')
-          if summary_path:
-              with open(summary_path, 'a', encoding='utf-8') as summary_file:
-                  summary_file.write(summary)
-
-          if not passed:
-              raise SystemExit(
-                  'pyfcstm source mismatch: expected {}, installed {}'.format(
-                      expected, shown(installed)
-                  )
-              )
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as stream:
+              stream.write(summary)
+          if installed != expected:
+              raise SystemExit('pyfcstm source mismatch')
           PY
-      - name: Tests and source self-check
+
+      - name: Tests and source product checks
         shell: bash
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          if [ -n "${CAIRO_BIN:-}" ]; then export PATH="$PATH:$CAIRO_BIN"; fi
-          python -m pytest test -q
-          python main.py --self-check
-      - name: Build and smoke-test onedir
+          set -o pipefail
+          if [ -n "${MINGW_BIN:-}" ]; then export PATH="$PATH:$MINGW_BIN"; fi
+          mkdir -p evidence/source
+          python -m pytest test -q --timeout=30 --junitxml=evidence/source/pytest.xml 2>&1 | tee evidence/source/pytest.log
+          python main.py --self-check --json-report evidence/source/self-check.json 2>&1 | tee evidence/source/self-check.log
+          for viewport in 1280x720 1920x1080; do
+            for scale in 1 1.5 2; do
+              key="${viewport}-scale-${scale}"
+              mkdir -p "evidence/source/acceptance/${key}"
+              QT_SCALE_FACTOR="$scale" python main.py --acceptance-check \
+                --viewport "$viewport" \
+                --json-report "evidence/source/acceptance/${key}/report.json" \
+                --artifact-dir "evidence/source/acceptance/${key}/artifacts" \
+                2>&1 | tee "evidence/source/acceptance/${key}/run.log"
+            done
+          done
+
+      - name: Generate, compile, and execute all five templates
+        shell: bash
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+        run: |
+          set -o pipefail
+          if [ -n "${MINGW_BIN:-}" ]; then export PATH="$PATH:$MINGW_BIN"; fi
+          python scripts/verify_generated_templates.py \
+            --output-dir evidence/source/generated-templates \
+            2>&1 | tee evidence/source/generated-templates.log
+
+      - name: Build and verify onedir
         shell: bash
         env:
           FCSTM_GUI_BUILD_MODE: onedir
           QT_QPA_PLATFORM: offscreen
         run: |
-          if [ -n "${CAIRO_BIN:-}" ]; then export PATH="$PATH:$CAIRO_BIN"; fi
-          pyinstaller --noconfirm main.spec
-          ./dist/fcstm-gui/${{ matrix.executable }} --self-check
+          set -o pipefail
+          if [ -n "${MINGW_BIN:-}" ]; then export PATH="$PATH:$MINGW_BIN"; fi
+          pyinstaller --noconfirm main.spec 2>&1 | tee evidence/onedir-build.log
+          mkdir -p evidence/onedir
+          executable="./dist/fcstm-gui/${{ matrix.executable }}"
+          "$executable" --self-check --json-report evidence/onedir/self-check.json 2>&1 | tee evidence/onedir/self-check.log
+          for viewport in 1280x720 1920x1080; do
+            for scale in 1 1.5 2; do
+              key="${viewport}-scale-${scale}"
+              mkdir -p "evidence/onedir/acceptance/${key}"
+              QT_SCALE_FACTOR="$scale" "$executable" --acceptance-check \
+                --viewport "$viewport" \
+                --json-report "evidence/onedir/acceptance/${key}/report.json" \
+                --artifact-dir "evidence/onedir/acceptance/${key}/artifacts" \
+                2>&1 | tee "evidence/onedir/acceptance/${key}/run.log"
+            done
+          done
+
       - name: Archive onedir
         shell: bash
         run: python -c "import shutil; shutil.make_archive('fcstm-gui-${{ matrix.label }}', 'zip', 'dist', 'fcstm-gui')"
-      - uses: actions/upload-artifact@v5
+
+      - name: Upload onedir product
+        uses: actions/upload-artifact@v7
         with:
           name: fcstm-gui-${{ matrix.label }}
           path: fcstm-gui-${{ matrix.label }}.zip
           if-no-files-found: error
-      - name: Build and smoke-test onefile
+          retention-days: 14
+
+      - name: Build and verify onefile
         shell: bash
         env:
           FCSTM_GUI_BUILD_MODE: onefile
           QT_QPA_PLATFORM: offscreen
         run: |
-          if [ -n "${CAIRO_BIN:-}" ]; then export PATH="$PATH:$CAIRO_BIN"; fi
+          set -o pipefail
+          if [ -n "${MINGW_BIN:-}" ]; then export PATH="$PATH:$MINGW_BIN"; fi
           rm -rf build dist
-          pyinstaller --noconfirm main.spec
-          ./dist/${{ matrix.executable }} --self-check
-      - uses: actions/upload-artifact@v5
+          pyinstaller --noconfirm main.spec 2>&1 | tee evidence/onefile-build.log
+          mkdir -p evidence/onefile
+          executable="./dist/${{ matrix.executable }}"
+          "$executable" --self-check --json-report evidence/onefile/self-check.json 2>&1 | tee evidence/onefile/self-check.log
+          for viewport in 1280x720 1920x1080; do
+            for scale in 1 1.5 2; do
+              key="${viewport}-scale-${scale}"
+              mkdir -p "evidence/onefile/acceptance/${key}"
+              QT_SCALE_FACTOR="$scale" "$executable" --acceptance-check \
+                --viewport "$viewport" \
+                --json-report "evidence/onefile/acceptance/${key}/report.json" \
+                --artifact-dir "evidence/onefile/acceptance/${key}/artifacts" \
+                2>&1 | tee "evidence/onefile/acceptance/${key}/run.log"
+            done
+          done
+
+      - name: Upload onefile product
+        uses: actions/upload-artifact@v7
         with:
           name: fcstm-gui-${{ matrix.label }}-onefile
           path: dist/${{ matrix.executable }}
           if-no-files-found: error
+          retention-days: 14
 
+      - name: Upload build verification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fcstm-gui-${{ matrix.label }}-build-evidence
+          path: evidence
+          if-no-files-found: warn
+          retention-days: 14
+
+  # Stage 2 deliberately has no checkout, setup-python, pip, or project
+  # dependencies. It treats both downloaded products as black boxes.
   verify:
     name: Verify on fresh ${{ matrix.label }}
     needs: build
@@ -160,22 +236,42 @@ jobs:
           - {os: macos-15-intel, label: macos-x86_64, executable: fcstm-gui}
     runs-on: ${{ matrix.os }}
     steps:
-      # Deliberately no checkout, setup-python, or pip install in this job.
-      - uses: actions/setup-java@v5
+      - name: Show fresh runner inventory
+        shell: bash
+        run: |
+          uname -a || true
+          which python || true
+          which python3 || true
+
+      - name: Install Linux host runtime only
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb default-jre-headless
+
+      - name: Set up Java 11 on Windows and macOS
+        if: runner.os != 'Linux'
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '11'
-      - name: Install Linux host runtime only (no Python dependencies)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends xvfb default-jre-headless
-      - uses: actions/download-artifact@v5
+
+      - name: Confirm Java runtime
+        shell: bash
+        run: java -version
+
+      - name: Download onedir product
+        uses: actions/download-artifact@v8
         with:
           name: fcstm-gui-${{ matrix.label }}
           path: downloaded/onedir
-      - uses: actions/download-artifact@v5
+
+      - name: Download onefile product
+        uses: actions/download-artifact@v8
         with:
           name: fcstm-gui-${{ matrix.label }}-onefile
           path: downloaded/onefile
+
       - name: Unpack onedir
         shell: bash
         run: |
@@ -185,17 +281,59 @@ jobs:
           else
             unzip -q "downloaded/onedir/fcstm-gui-${{ matrix.label }}.zip" -d extracted
           fi
+
       - name: Mark POSIX binaries executable
         if: runner.os != 'Windows'
         shell: bash
-        run: chmod +x extracted/fcstm-gui/${{ matrix.executable }} downloaded/onefile/${{ matrix.executable }}
-      - name: Black-box self-check onedir
+        run: chmod +x "extracted/fcstm-gui/${{ matrix.executable }}" "downloaded/onefile/${{ matrix.executable }}"
+
+      - name: Black-box verify onedir
         shell: bash
         env:
           QT_QPA_PLATFORM: offscreen
-        run: ./extracted/fcstm-gui/${{ matrix.executable }} --self-check
-      - name: Black-box self-check onefile
+        run: |
+          set -o pipefail
+          mkdir -p evidence/onedir
+          executable="./extracted/fcstm-gui/${{ matrix.executable }}"
+          "$executable" --self-check --json-report evidence/onedir/self-check.json 2>&1 | tee evidence/onedir/self-check.log
+          for viewport in 1280x720 1920x1080; do
+            for scale in 1 1.5 2; do
+              key="${viewport}-scale-${scale}"
+              mkdir -p "evidence/onedir/acceptance/${key}"
+              QT_SCALE_FACTOR="$scale" "$executable" --acceptance-check \
+                --viewport "$viewport" \
+                --json-report "evidence/onedir/acceptance/${key}/report.json" \
+                --artifact-dir "evidence/onedir/acceptance/${key}/artifacts" \
+                2>&1 | tee "evidence/onedir/acceptance/${key}/run.log"
+            done
+          done
+
+      - name: Black-box verify onefile
         shell: bash
         env:
           QT_QPA_PLATFORM: offscreen
-        run: ./downloaded/onefile/${{ matrix.executable }} --self-check
+        run: |
+          set -o pipefail
+          mkdir -p evidence/onefile
+          executable="./downloaded/onefile/${{ matrix.executable }}"
+          "$executable" --self-check --json-report evidence/onefile/self-check.json 2>&1 | tee evidence/onefile/self-check.log
+          for viewport in 1280x720 1920x1080; do
+            for scale in 1 1.5 2; do
+              key="${viewport}-scale-${scale}"
+              mkdir -p "evidence/onefile/acceptance/${key}"
+              QT_SCALE_FACTOR="$scale" "$executable" --acceptance-check \
+                --viewport "$viewport" \
+                --json-report "evidence/onefile/acceptance/${key}/report.json" \
+                --artifact-dir "evidence/onefile/acceptance/${key}/artifacts" \
+                2>&1 | tee "evidence/onefile/acceptance/${key}/run.log"
+            done
+          done
+
+      - name: Upload fresh-runner verification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fcstm-gui-${{ matrix.label }}-fresh-evidence
+          path: evidence
+          if-no-files-found: warn
+          retention-days: 14

@@ -72,6 +72,22 @@ def test_graph_workspace_refresh_selection_controls_and_real_svg_export(
     assert record.artifacts[0].path == str(target)
 
 
+def test_source_edit_does_not_schedule_projection_variable_commit(
+    qtbot, delivery_window
+):
+    window = delivery_window
+    initial_revision = window.document_session.source_revision
+
+    with qtbot.waitSignal(window.document_validation_finished, timeout=3000):
+        window.source_editor.insertPlainText("\n")
+
+    validated_revision = window.document_session.source_revision
+    assert validated_revision == initial_revision + 1
+    assert not window._variable_edit_timer.isActive()
+    qtbot.wait(500)
+    assert window.document_session.source_revision == validated_revision
+
+
 def test_generation_dialog_filters_languages_and_generates_real_packaged_template(
     qtbot, delivery_window, tmp_path
 ):

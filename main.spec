@@ -11,6 +11,14 @@ datas = [
         'app/resources/self_check/dynamic_validation',
         'app/resources/self_check/dynamic_validation',
     ),
+    (
+        'app/resources/self_check/self_check_report.schema.json',
+        'app/resources/self_check',
+    ),
+    (
+        'app/resources/self_check/acceptance_check_report.schema.json',
+        'app/resources/self_check',
+    ),
 ] + collect_data_files('qtawesome') + collect_data_files('pyfcstm')
 if sys.platform == 'win32':
     z3_suffixes = ('.dll',)

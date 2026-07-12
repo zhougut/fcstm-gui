@@ -139,9 +139,9 @@ class TaskResultDock(QtWidgets.QDockWidget):
             "打开目录", container
         )
         self.clear_filtered_button = QtWidgets.QPushButton(
-            "清空筛选结果", container
+            "清空筛选", container
         )
-        self.clear_all_button = QtWidgets.QPushButton("清空全部历史", container)
+        self.clear_all_button = QtWidgets.QPushButton("清空历史", container)
         buttons = (
             (self.copy_button, "task_copy_button", "复制脱敏后的任务详情"),
             (

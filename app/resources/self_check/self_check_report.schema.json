@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "fcstm-gui.self-check-report.v1",
+  "type": "object",
+  "required": ["schema", "version", "status", "platform", "counts", "results"],
+  "properties": {
+    "schema": {"const": "fcstm-gui.self-check-report"},
+    "version": {"const": 1},
+    "status": {"enum": ["passed", "failed"]},
+    "platform": {"type": "object"},
+    "counts": {
+      "type": "object",
+      "required": ["total", "passed", "failed", "module_closure", "behavior"]
+    },
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "group", "kind", "status", "duration_ms", "detail"],
+        "properties": {
+          "kind": {"enum": ["module-closure", "behavior"]},
+          "status": {"enum": ["passed", "failed"]}
+        }
+      }
+    }
+  }
+}
