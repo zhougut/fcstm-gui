@@ -243,6 +243,9 @@ always expose the same contract.
   Keyboard acceptance must raise the product window and wait for actual active
   window plus focus state before sending the standard `Cmd` shortcut, then wait
   for the target page instead of assuming one event-loop pass is sufficient.
+- Qt serializes the macOS Command modifier as `Meta` in portable shortcut text.
+  Cross-platform report tests must expect `Meta+<key>` on Darwin and
+  `Ctrl+<key>` on Linux/Windows; hard-coding the display label is not portable.
 - A wide viewport can fit the entire graph at 100%, leaving both scrollbar
   ranges at zero. A drag acceptance item must first deliver real wheel events
   until the graph is pannable, then use press/move/release and assert the

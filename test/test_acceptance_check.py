@@ -2,6 +2,7 @@ from __future__ import unicode_literals
 
 import hashlib
 import json
+import platform
 
 from app.acceptance_check import (
     _is_preapproved_native_overlap,
@@ -232,13 +233,9 @@ def test_full_gui_acceptance_writes_report(qtbot, tmp_path, monkeypatch):
     assert report["geometry"]["font_family"] == "Noto Sans CJK SC"
     assert report["geometry"]["font_point_size"] == 10
     workspaces = report["geometry"]["active_workspaces"]
+    modifier = "Meta" if platform.system() == "Darwin" else "Ctrl"
     assert [item["shortcut"] for item in workspaces] == [
-        "Ctrl+1",
-        "Ctrl+2",
-        "Ctrl+3",
-        "Ctrl+4",
-        "Ctrl+5",
-        "Ctrl+6",
+        "{}+{}".format(modifier, index) for index in range(1, 7)
     ]
     assert all(item["visible_to_window"] for item in workspaces)
     assert all(item["contained_by_window"] for item in workspaces)
