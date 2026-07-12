@@ -146,6 +146,10 @@ always expose the same contract.
   layout allocation, Qt can place focusable siblings on top of each other;
   keep stable control widths and fail geometry acceptance on every real
   overlap instead of adding platform-specific overlap exemptions.
+- A scroll area's child layout must publish its real minimum height. Fixed
+  table minimums plus native button metrics can exceed a manually guessed
+  group height at Cocoa scale 2; use `QLayout.SetMinimumSize` so the scroll
+  area scrolls instead of compressing sibling tables and buttons together.
 - Run cross-platform GUI checks with the target platform plugin (`xcb`,
   `windows`, or `cocoa`) in both package and fresh stages. Windows Qt can
   access-violate when a real modal message box is driven through the offscreen

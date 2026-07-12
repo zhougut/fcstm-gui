@@ -1745,6 +1745,12 @@ state TrafficLight {
         assert window.model_workspace.isAncestorOf(window.frame_state_machine_info)
         assert window.source_workspace.isAncestorOf(window.source_editor)
         assert window.model_scroll_area.isVisible()
+        assert window.event_group.minimumHeight() >= 260
+        assert window.event_table.minimumHeight() >= 90
+        assert window.event_reference_table.minimumHeight() >= 90
+        assert window.event_group.layout().sizeConstraint() == (
+            QtWidgets.QLayout.SetMinimumSize
+        )
         assert window.event_table.height() >= 60
         assert window.event_reference_table.height() >= 60
         assert not window.task_result_dock.isVisible()

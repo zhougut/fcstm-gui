@@ -668,12 +668,12 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self.event_group = QtWidgets.QGroupBox("事件", self.model_workspace)
         self.event_group.setObjectName("event_group")
         self.event_group.setAccessibleName("事件编辑器")
-        self.event_group.setMinimumHeight(190)
         event_layout = QtWidgets.QVBoxLayout(self.event_group)
+        event_layout.setSizeConstraint(QtWidgets.QLayout.SetMinimumSize)
         self.event_table = QtWidgets.QTableWidget(self.event_group)
         self.event_table.setObjectName("event_table")
         self.event_table.setAccessibleName("事件列表")
-        self.event_table.setMinimumHeight(70)
+        self.event_table.setMinimumHeight(90)
         self.event_table.setColumnCount(7)
         self.event_table.setHorizontalHeaderLabels(
             ("所属状态", "名称", "显示名", "作用域", "引用", "物理来源", "权限")
@@ -698,7 +698,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self.event_reference_table = QtWidgets.QTableWidget(self.event_group)
         self.event_reference_table.setObjectName("event_reference_table")
         self.event_reference_table.setAccessibleName("事件迁移引用")
-        self.event_reference_table.setMinimumHeight(70)
+        self.event_reference_table.setMinimumHeight(90)
         self.event_reference_table.setToolTip("所选事件的迁移或 import 映射引用，双击定位源码")
         self.event_reference_table.setColumnCount(4)
         self.event_reference_table.setHorizontalHeaderLabels(
