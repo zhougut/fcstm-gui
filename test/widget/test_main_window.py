@@ -1,7 +1,8 @@
 import threading
+from dataclasses import replace
 
 import pytest
-from PyQt5 import QtCore, QtWidgets
+from PyQt5 import QtCore, QtGui, QtWidgets
 
 from app.model import State, StateManager
 from app.model.session import ValidationState
@@ -440,6 +441,29 @@ state TrafficLight {
         assert window.state_manager.root_state.name == "Fixed"
         assert window.action_graph_gen.isEnabled()
 
+    def test_initially_invalid_source_can_be_repaired_and_validated(
+        self, qtbot, window, tmp_path
+    ):
+        source = tmp_path / "repair.fcstm"
+        source.write_text("state Broken {", encoding="utf-8")
+        invalid = window.document_service.load(source)
+        assert invalid.last_valid_snapshot is None
+        window._set_active_document_session(invalid)
+
+        fixed = "state Fixed { state A; [*] -> A; A -> [*]; }"
+        with qtbot.waitSignal(
+            window.document_validation_finished, timeout=3000
+        ) as blocker:
+            window.source_editor.setPlainText(fixed)
+
+        result = blocker.args[0]
+        assert result.status is main_window.TaskStatus.SUCCESS
+        assert window.document_session.source_text == fixed
+        assert window.document_session.current_valid_snapshot is not None
+        assert window.document_session.last_valid_snapshot.source_revision == 1
+        assert window.document_session.validation_state is ValidationState.VALID
+        assert window.state_manager.root_state.name == "Fixed"
+
     def test_save_writes_exact_source_text_and_clears_dirty(
         self, monkeypatch, qtbot, window, tmp_path
     ):
@@ -641,10 +665,21 @@ state TrafficLight {
             lambda parent, title, text, *args: messages.append((title, text)),
         )
 
-        report = window._validate_statechart()
+        with qtbot.waitSignal(window.model_check_finished, timeout=3000) as blocker:
+            handle = window._validate_statechart()
+        result = blocker.args[0]
 
-        assert report["root_state_path"] == "Root"
-        assert messages
+        assert handle.stamp.task_id == result.stamp.task_id
+        assert result.value["root_state_path"] == "Root"
+        assert messages == []
+        record = next(
+            item
+            for item in window.task_center.records
+            if item.task_id == handle.stamp.task_id
+        )
+        assert record.kind == "model-check"
+        assert record.status is main_window.HistoryTaskStatus.SUCCESS
+        assert record.session_id == window.document_session.session_id
         exported = tmp_path / "exported.fcstm"
         monkeypatch.setattr(
             QtWidgets.QFileDialog,
@@ -656,6 +691,60 @@ state TrafficLight {
         )
         window._export_statechart()
         assert exported.read_bytes() == original_bytes
+
+    def test_form_edit_marks_running_model_check_stale(
+        self, monkeypatch, qtbot, window, tmp_path
+    ):
+        source = tmp_path / "stale-model-check.fcstm"
+        source.write_text(
+            "state Root { state A; [*] -> A; A -> [*]; }",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            QtWidgets.QFileDialog,
+            "getOpenFileName",
+            lambda *args, **kwargs: (str(source), "fcstm Files (*.fcstm)"),
+        )
+        with qtbot.waitSignal(window.document_load_finished, timeout=3000):
+            window._import_statechart()
+
+        original_require = window.document_service.require_current_valid_snapshot
+        worker_started = threading.Event()
+        release_worker = threading.Event()
+        calls = []
+
+        def controlled_require(session):
+            calls.append((threading.current_thread().ident, session.source_revision))
+            if threading.current_thread() is not threading.main_thread():
+                worker_started.set()
+                assert release_worker.wait(3)
+            return original_require(session)
+
+        monkeypatch.setattr(
+            window.document_service,
+            "require_current_valid_snapshot",
+            controlled_require,
+        )
+        results = []
+        window.model_check_finished.connect(results.append)
+        handle = window._validate_statechart()
+        qtbot.waitUntil(worker_started.is_set, timeout=3000)
+        state = window.state_manager.get_state_by_path("Root.A")
+        assert window._rename_projected_state(state, "Ready")
+        assert window.document_session.source_revision == 1
+        release_worker.set()
+        qtbot.waitUntil(lambda: len(results) == 1, timeout=3000)
+
+        assert results[0].status is main_window.TaskStatus.STALE
+        assert handle.result.status is main_window.TaskStatus.STALE
+        record = next(
+            item
+            for item in window.task_center.records
+            if item.task_id == handle.stamp.task_id
+        )
+        assert record.status is main_window.HistoryTaskStatus.STALE
+        assert record.source_revision == 0
+        assert window.document_session.source_revision == 1
 
     def test_loaded_form_insertions_commit_local_text_edits(
         self, monkeypatch, qtbot, window, tmp_path
@@ -750,6 +839,1099 @@ state TrafficLight {
         assert "state C;" not in window.document_session.source_text
         assert "A -> C;" not in window.document_session.source_text
         assert window.document_session.source_revision == 6
+
+    def test_form_edit_undo_redo_restores_source_projection_and_unique_revisions(
+        self, monkeypatch, qtbot, window, tmp_path
+    ):
+        source = tmp_path / "undo.fcstm"
+        original = "state Root { state A; [*] -> A; A -> [*]; }"
+        source.write_text(original, encoding="utf-8")
+        monkeypatch.setattr(
+            QtWidgets.QFileDialog,
+            "getOpenFileName",
+            lambda *args, **kwargs: (str(source), "fcstm Files (*.fcstm)"),
+        )
+        with qtbot.waitSignal(window.document_load_finished, timeout=3000):
+            window._import_statechart()
+
+        class StateDialog:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def exec_(self):
+                return QtWidgets.QDialog.Accepted
+
+            def get_state_name(self):
+                return "B"
+
+        monkeypatch.setattr(main_window, "DialogEditState", StateDialog)
+        root = window.state_manager.root_state
+        window._add_state(root, False)
+
+        changed = window.document_session.source_text
+        assert "state B;" in changed
+        assert window.document_session.source_revision == 1
+        assert window.command_stack.can_undo
+        assert window.action_undo.isEnabled()
+        window.tree_all_state.setFocus()
+
+        assert window._undo_document()
+        assert window.document_session.source_revision == 2
+        assert window.document_session.source_text == original
+        assert window.state_manager.get_state_by_path("Root.B") is None
+        assert window.command_stack.can_redo
+        assert window.action_redo.isEnabled()
+
+        assert window._redo_document()
+        assert window.document_session.source_revision == 3
+        assert window.document_session.source_text == changed
+        assert window.state_manager.get_state_by_path("Root.B") is not None
+        assert window.document_session.dirty
+
+    def test_direct_source_edit_and_new_load_clear_form_command_history(
+        self, monkeypatch, qtbot, window, tmp_path
+    ):
+        first = tmp_path / "first.fcstm"
+        second = tmp_path / "second.fcstm"
+        first.write_text(
+            "state First { state A; [*] -> A; A -> [*]; }",
+            encoding="utf-8",
+        )
+        second.write_text("state Second;", encoding="utf-8")
+        selected = [str(first), str(second)]
+        monkeypatch.setattr(
+            QtWidgets.QFileDialog,
+            "getOpenFileName",
+            lambda *args, **kwargs: (
+                selected.pop(0),
+                "fcstm Files (*.fcstm)",
+            ),
+        )
+        with qtbot.waitSignal(window.document_load_finished, timeout=3000):
+            window._import_statechart()
+        state = window.state_manager.get_state_by_path("First.A")
+        assert window._rename_projected_state(state, "Ready")
+        assert window.command_stack.can_undo
+
+        with qtbot.waitSignal(window.document_validation_finished, timeout=3000):
+            window.source_editor.setPlainText(
+                window.document_session.source_text.replace("Ready", "Running")
+            )
+        assert not window.command_stack.can_undo
+        monkeypatch.setattr(
+            QtWidgets.QMessageBox,
+            "question",
+            lambda *args, **kwargs: QtWidgets.QMessageBox.Discard,
+        )
+
+        with qtbot.waitSignal(window.document_load_finished, timeout=3000):
+            window._import_statechart()
+        assert window.document_session.path == str(second.resolve())
+        assert not window.command_stack.can_undo
+        assert not window.command_stack.can_redo
+
+    def test_load_task_is_persistent_and_debounce_validation_is_transient(
+        self, monkeypatch, qtbot, window, tmp_path
+    ):
+        source = tmp_path / "tasks.fcstm"
+        source.write_text("state Tasks;", encoding="utf-8")
+        monkeypatch.setattr(
+            QtWidgets.QFileDialog,
+            "getOpenFileName",
+            lambda *args, **kwargs: (str(source), "fcstm Files (*.fcstm)"),
+        )
+        with qtbot.waitSignal(window.document_load_finished, timeout=3000):
+            operation = window._import_statechart()
+
+        loads = [
+            record
+            for record in window.task_center.records
+            if record.kind == "document-load"
+        ]
+        assert len(loads) == 1
+        assert loads[0].task_id == operation.operation_id
+        assert loads[0].status is main_window.HistoryTaskStatus.SUCCESS
+        assert loads[0].session_id == window.document_session.session_id
+        assert loads[0].source_revision == window.document_session.source_revision
+        assert loads[0].dependency_fingerprints == dict(
+            window.document_session.current_valid_snapshot.dependency_manifest
+        )
+        assert window.task_result_dock.table.rowCount() == 1
+
+        with qtbot.waitSignal(window.document_validation_finished, timeout=3000):
+            window.source_editor.setPlainText("state TasksChanged;")
+        assert all(
+            record.kind != "document-validate"
+            for record in window.task_center.records
+        )
+
+    def test_superseded_debounce_validation_releases_transient_record(
+        self, monkeypatch, qtbot, window, tmp_path
+    ):
+        source = tmp_path / "supersede-validation.fcstm"
+        source.write_text("state Initial;", encoding="utf-8")
+        monkeypatch.setattr(
+            QtWidgets.QFileDialog,
+            "getOpenFileName",
+            lambda *args, **kwargs: (str(source), "fcstm Files (*.fcstm)"),
+        )
+        with qtbot.waitSignal(window.document_load_finished, timeout=3000):
+            window._import_statechart()
+        original_validate = window.document_service.validate
+        first_started = threading.Event()
+        release_first = threading.Event()
+        calls = []
+
+        def controlled_validate(session):
+            calls.append(session.source_text)
+            if len(calls) == 1:
+                first_started.set()
+                assert release_first.wait(3)
+            return original_validate(session)
+
+        monkeypatch.setattr(
+            window.document_service, "validate", controlled_validate
+        )
+        results = []
+        window.document_validation_finished.connect(results.append)
+        window.source_editor.setPlainText("state First;")
+        qtbot.waitUntil(first_started.is_set, timeout=3000)
+        window.source_editor.setPlainText("state Latest;")
+        release_first.set()
+        qtbot.waitUntil(lambda: len(results) == 2, timeout=3000)
+
+        assert window.document_session.source_text == "state Latest;"
+        assert window.document_session.current_valid_snapshot is not None
+        assert all(
+            record.kind != "document-validate"
+            for record in window.task_center.records
+        )
+
+    def test_load_history_write_failure_is_nonblocking_and_cleans_operation(
+        self, monkeypatch, qtbot, window, tmp_path
+    ):
+        source = tmp_path / "history-write.fcstm"
+        source.write_text("state HistoryWrite;", encoding="utf-8")
+        monkeypatch.setattr(
+            QtWidgets.QFileDialog,
+            "getOpenFileName",
+            lambda *args, **kwargs: (str(source), "fcstm Files (*.fcstm)"),
+        )
+        monkeypatch.setattr(
+            window.task_center,
+            "_write",
+            lambda encoded: (_ for _ in ()).throw(OSError("disk full")),
+        )
+        with qtbot.waitSignal(window.document_load_finished, timeout=3000):
+            operation = window._import_statechart()
+
+        assert operation.result.status is main_window.TaskStatus.SUCCESS
+        assert operation.operation_id not in window._logical_load_operations
+        record = next(
+            item
+            for item in window.task_center.records
+            if item.task_id == operation.operation_id
+        )
+        assert record.status is main_window.HistoryTaskStatus.SUCCESS
+        assert "任务历史写入失败" in window.statusbar.currentMessage()
+
+    def test_load_submit_failure_finishes_logical_operation_and_history(
+        self, monkeypatch, qtbot, window, tmp_path
+    ):
+        source = tmp_path / "submit-failure.fcstm"
+        source.write_text("state SubmitFailure;", encoding="utf-8")
+        monkeypatch.setattr(
+            QtWidgets.QFileDialog,
+            "getOpenFileName",
+            lambda *args, **kwargs: (str(source), "fcstm Files (*.fcstm)"),
+        )
+        monkeypatch.setattr(
+            window.task_runner,
+            "submit",
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                RuntimeError("runner stopped")
+            ),
+        )
+        with qtbot.waitSignal(window.document_load_finished, timeout=3000):
+            operation = window._import_statechart()
+
+        assert operation.result.status is main_window.TaskStatus.FAILED
+        assert operation.operation_id not in window._logical_load_operations
+        record = next(
+            item
+            for item in window.task_center.records
+            if item.task_id == operation.operation_id
+        )
+        assert record.status is main_window.HistoryTaskStatus.FAILED
+        assert "runner stopped" in "\n".join(record.exception_chain)
+
+    def test_save_updates_command_baseline_before_direct_and_form_edits(
+        self, monkeypatch, qtbot, window, tmp_path
+    ):
+        source = tmp_path / "baseline.fcstm"
+        source.write_text(
+            "state Original { state A; [*] -> A; A -> [*]; }",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            QtWidgets.QFileDialog,
+            "getOpenFileName",
+            lambda *args, **kwargs: (str(source), "fcstm Files (*.fcstm)"),
+        )
+        with qtbot.waitSignal(window.document_load_finished, timeout=3000):
+            window._import_statechart()
+        state = window.state_manager.get_state_by_path("Original.A")
+        assert window._rename_projected_state(state, "Saved")
+        assert window._save_current_document()
+        assert "state Saved;" in source.read_text(encoding="utf-8")
+
+        with qtbot.waitSignal(window.document_validation_finished, timeout=3000):
+            window.source_editor.setPlainText(
+                window.document_session.source_text.replace("Saved", "Direct")
+            )
+        state = window.state_manager.get_state_by_path("Original.Direct")
+        assert window._rename_projected_state(state, "A")
+
+        assert window.document_session.dirty
+        assert "state A;" in window.document_session.source_text
+        assert "state Saved;" in source.read_text(encoding="utf-8")
+
+    def test_retry_respects_dirty_replacement_gate_and_rejects_redacted_path(
+        self, monkeypatch, window, tmp_path
+    ):
+        current_path = tmp_path / "current.fcstm"
+        retry_path = tmp_path / "retry.fcstm"
+        current_path.write_text("state Current;", encoding="utf-8")
+        retry_path.write_text("state Retry;", encoding="utf-8")
+        current = window.document_service.load(current_path)
+        dirty = window.document_service.replace_source_text(
+            current, "state Dirty;"
+        )
+        window._set_active_document_session(dirty)
+        record = main_window.TaskRecord(
+            task_id="retry",
+            kind="document-load",
+            session_id="",
+            source_revision=0,
+            dependency_fingerprints={},
+            created_at=1.0,
+            started_at=1.0,
+            finished_at=2.0,
+            status=main_window.HistoryTaskStatus.FAILED,
+            summary="failed",
+            messages=(),
+            artifacts=(),
+            retry_descriptor={
+                "kind": "document-load",
+                "path": str(retry_path),
+                "encoding": None,
+                "encoding_hints": [],
+            },
+            exception_chain=(),
+            boundary=main_window.TaskBoundary.EXPLICIT,
+        )
+        prompts = []
+        monkeypatch.setattr(
+            QtWidgets.QMessageBox,
+            "question",
+            lambda *args, **kwargs: (
+                prompts.append(args),
+                QtWidgets.QMessageBox.Cancel,
+            )[1],
+        )
+
+        assert window._retry_task_record(record) is None
+        assert prompts
+        assert window.document_session is dirty
+        assert window._logical_load_operations == {}
+
+        redacted = replace(
+            record,
+            retry_descriptor={
+                "kind": "document-load",
+                "path": "<WORKSPACE>/retry.fcstm",
+            },
+        )
+        prompts.clear()
+        assert window._retry_task_record(redacted) is None
+        assert prompts == []
+
+    def test_running_load_can_be_cancelled_without_replacing_session(
+        self, monkeypatch, qtbot, window, tmp_path
+    ):
+        current_path = tmp_path / "current.fcstm"
+        incoming_path = tmp_path / "incoming.fcstm"
+        current_path.write_text("state Current;", encoding="utf-8")
+        incoming_path.write_text("state Incoming;", encoding="utf-8")
+        current = window.document_service.load(current_path)
+        window._set_active_document_session(current)
+        original_load = window.document_service.load
+        worker_started = threading.Event()
+        release_worker = threading.Event()
+
+        def controlled_load(path, *args, **kwargs):
+            if str(path) == str(incoming_path):
+                worker_started.set()
+                assert release_worker.wait(3)
+            return original_load(path, *args, **kwargs)
+
+        monkeypatch.setattr(window.document_service, "load", controlled_load)
+        operation = window._start_document_load(str(incoming_path))
+        qtbot.waitUntil(worker_started.is_set, timeout=3000)
+
+        window.task_result_dock.refresh()
+        row = next(
+            row
+            for row, record in enumerate(window.task_result_dock._visible_records)
+            if record.task_id == operation.operation_id
+        )
+        qtbot.mouseClick(
+            window.task_result_dock.table.cellWidget(row, 5),
+            QtCore.Qt.LeftButton,
+        )
+        cancelling = next(
+            item
+            for item in window.task_center.records
+            if item.task_id == operation.operation_id
+        )
+        assert cancelling.status is main_window.HistoryTaskStatus.CANCEL_REQUESTED
+        assert cancelling.summary == "正在取消加载"
+        release_worker.set()
+        qtbot.waitUntil(lambda: operation.result is not None, timeout=3000)
+
+        assert operation.result.status is main_window.TaskStatus.CANCELLED
+        assert window.document_session is current
+        completed = next(
+            item
+            for item in window.task_center.records
+            if item.task_id == operation.operation_id
+        )
+        assert completed.status is main_window.HistoryTaskStatus.CANCELLED
+
+    def test_failed_load_retry_creates_new_successful_task(
+        self, monkeypatch, qtbot, window, tmp_path
+    ):
+        retry_path = tmp_path / "created-after-failure.fcstm"
+        monkeypatch.setattr(
+            QtWidgets.QMessageBox, "critical", lambda *args, **kwargs: None
+        )
+        failed_operation = window._start_document_load(str(retry_path))
+        qtbot.waitUntil(lambda: failed_operation.result is not None, timeout=3000)
+        failed_record = next(
+            item
+            for item in window.task_center.records
+            if item.task_id == failed_operation.operation_id
+        )
+        assert failed_record.status is main_window.HistoryTaskStatus.FAILED
+
+        retry_path.write_text("state Retried;", encoding="utf-8")
+        window.task_result_dock.refresh()
+        row = next(
+            row
+            for row, record in enumerate(window.task_result_dock._visible_records)
+            if record.task_id == failed_record.task_id
+        )
+        with qtbot.waitSignal(window.document_load_finished, timeout=3000) as blocker:
+            qtbot.mouseClick(
+                window.task_result_dock.table.cellWidget(row, 5),
+                QtCore.Qt.LeftButton,
+            )
+        retry_outcome = blocker.args[0]
+        assert retry_outcome.operation_id != failed_operation.operation_id
+        assert retry_outcome.status is main_window.TaskStatus.SUCCESS
+        assert window.document_session.path == str(retry_path.resolve())
+        assert window.state_manager.root_state.name == "Retried"
+        retried_record = next(
+            item
+            for item in window.task_center.records
+            if item.task_id == retry_outcome.operation_id
+        )
+        assert retried_record.status is main_window.HistoryTaskStatus.SUCCESS
+
+    def test_running_model_check_can_be_cancelled_then_retried(
+        self, monkeypatch, qtbot, window, tmp_path
+    ):
+        source = tmp_path / "cancel-check.fcstm"
+        source.write_text(
+            "state Root { state A; [*] -> A; A -> [*]; }", encoding="utf-8"
+        )
+        session = window.document_service.load(source)
+        window._set_active_document_session(session)
+        original_require = window.document_service.require_current_valid_snapshot
+        worker_started = threading.Event()
+        release_worker = threading.Event()
+
+        def controlled_require(candidate):
+            if threading.current_thread() is not threading.main_thread():
+                worker_started.set()
+                assert release_worker.wait(3)
+            return original_require(candidate)
+
+        monkeypatch.setattr(
+            window.document_service,
+            "require_current_valid_snapshot",
+            controlled_require,
+        )
+        handle = window._validate_statechart()
+        qtbot.waitUntil(worker_started.is_set, timeout=3000)
+
+        window.task_result_dock.refresh()
+        row = next(
+            row
+            for row, record in enumerate(window.task_result_dock._visible_records)
+            if record.task_id == handle.stamp.task_id
+        )
+        qtbot.mouseClick(
+            window.task_result_dock.table.cellWidget(row, 5),
+            QtCore.Qt.LeftButton,
+        )
+        cancelling = next(
+            item
+            for item in window.task_center.records
+            if item.task_id == handle.stamp.task_id
+        )
+        assert cancelling.status is main_window.HistoryTaskStatus.CANCEL_REQUESTED
+        assert cancelling.summary == "正在取消模型检查"
+        release_worker.set()
+        qtbot.waitUntil(lambda: handle.result is not None, timeout=3000)
+        assert handle.result.status is main_window.TaskStatus.CANCELLED
+        assert window.document_session is session
+
+        cancelled_record = next(
+            item
+            for item in window.task_center.records
+            if item.task_id == handle.stamp.task_id
+        )
+        assert cancelled_record.status is main_window.HistoryTaskStatus.CANCELLED
+        monkeypatch.setattr(
+            window.document_service,
+            "require_current_valid_snapshot",
+            original_require,
+        )
+        window.task_result_dock.refresh()
+        row = next(
+            row
+            for row, record in enumerate(window.task_result_dock._visible_records)
+            if record.task_id == cancelled_record.task_id
+        )
+        with qtbot.waitSignal(window.model_check_finished, timeout=3000) as blocker:
+            qtbot.mouseClick(
+                window.task_result_dock.table.cellWidget(row, 5),
+                QtCore.Qt.LeftButton,
+            )
+        retried = blocker.args[0]
+        assert retried.stamp.task_id != handle.stamp.task_id
+        assert retried.status is main_window.TaskStatus.SUCCESS
+
+    def test_event_edit_save_and_fresh_reload_are_consistent(
+        self, monkeypatch, window, tmp_path
+    ):
+        source = tmp_path / "event-save.fcstm"
+        source.write_text(
+            'state Root { event Go named "Before"; state A; [*] -> A; }',
+            encoding="utf-8",
+        )
+        window._set_active_document_session(window.document_service.load(source))
+        window.tree_all_state.setCurrentItem(window.tree_all_state.topLevelItem(0))
+        monkeypatch.setattr(window, "_prompt_event", lambda *args: ("Run", "After"))
+        monkeypatch.setattr(
+            window, "_confirm_event_transaction", lambda *args: True
+        )
+
+        assert window._edit_event()
+        assert window._save_current_document()
+        fresh = main_window.DocumentService().load(source)
+        events = window.event_service.list_events(fresh, ("Root",))
+
+        assert [(item.name, item.display_name) for item in events] == [
+            ("Run", "After")
+        ]
+        assert fresh.source_text == window.document_session.source_text
+
+    def test_corrupt_history_warning_is_visible_and_dock_has_view_action(
+        self, qtbot, tmp_path
+    ):
+        data_dir = tmp_path / "task-data"
+        data_dir.mkdir()
+        (data_dir / "task-history.json").write_text(
+            "{broken-json", encoding="utf-8"
+        )
+        center = main_window.TaskCenter(
+            data_location_provider=lambda: str(data_dir),
+            now_provider=lambda: 10.0,
+        )
+        settings = QtCore.QSettings(
+            str(tmp_path / "history.ini"), QtCore.QSettings.IniFormat
+        )
+        history_window = main_window.AppMainWindow(
+            settings=settings, task_center=center
+        )
+        qtbot.addWidget(history_window)
+
+        warnings = [
+            record
+            for record in center.records
+            if record.kind == "task-history"
+        ]
+        assert len(warnings) == 1
+        assert warnings[0].status is main_window.HistoryTaskStatus.FAILED
+        assert history_window.task_result_dock.table.rowCount() == 1
+        assert history_window.action_toggle_task_results.shortcut().toString()
+        history_window.show()
+        history_window.action_toggle_task_results.trigger()
+        assert history_window.task_result_dock.isVisible()
+
+    def test_event_component_crud_and_action_undo_redo_use_exact_source_refs(
+        self, monkeypatch, qtbot, window, tmp_path
+    ):
+        source = tmp_path / "events.fcstm"
+        source.write_text(
+            'state Root { state A { event Go named "Go Event"; state X; '
+            "[*] -> X; X -> X : Go; } state B; [*] -> A; }",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            QtWidgets.QFileDialog,
+            "getOpenFileName",
+            lambda *args, **kwargs: (str(source), "fcstm Files (*.fcstm)"),
+        )
+        with qtbot.waitSignal(window.document_load_finished, timeout=3000):
+            window._import_statechart()
+        selected_items = window.tree_all_state.findItems(
+            "A", QtCore.Qt.MatchExactly | QtCore.Qt.MatchRecursive
+        )
+        assert len(selected_items) == 1
+        window.tree_all_state.setCurrentItem(selected_items[0])
+        assert window.event_table.rowCount() == 1
+        assert window.event_table.item(0, 0).text() == "Root.A"
+        assert window.event_table.item(0, 1).text() == "Go"
+        assert window.event_table.item(0, 3).text() == "declaration"
+        assert window.event_table.item(0, 6).text() == "可编辑"
+        assert window.event_table.item(0, 0).data(QtCore.Qt.UserRole)
+        assert window.event_reference_table.rowCount() == 1
+        assert window._open_event_reference_source(
+            window.event_reference_table.item(0, 0)
+        )
+        assert window.workspace_tabs.currentWidget() is window.source_workspace
+        assert window.source_editor.textCursor().selectedText().startswith("X -> X")
+        window.workspace_tabs.setCurrentWidget(window.model_workspace)
+
+        def assert_selected(path, event_name):
+            selected = window._get_pro_state()
+            assert selected is window.state_manager.get_state_by_path(path)
+            assert selected.get_full_path() == path
+            assert window.property_path_label.text() == "状态：{}".format(path)
+            assert window.event_table.rowCount() >= 1
+            assert window.event_table.item(0, 1).text() == event_name
+
+        answers = [("Run", "Run Event"), ("Stop", "Stop Event")]
+        monkeypatch.setattr(
+            window, "_prompt_event", lambda *args, **kwargs: answers.pop(0)
+        )
+        monkeypatch.setattr(
+            window, "_confirm_event_transaction", lambda *args: True
+        )
+        qtbot.mouseClick(window.event_edit_button, QtCore.Qt.LeftButton)
+        renamed = window.document_session.source_text
+        assert 'event Run named "Run Event";' in renamed
+        assert "X -> X : Run;" in renamed
+        assert window.document_session.source_revision == 1
+        assert_selected("Root.A", "Run")
+
+        window.event_table.setFocus()
+        window.action_undo.trigger()
+        assert window.document_session.source_revision == 2
+        assert 'event Go named "Go Event";' in window.document_session.source_text
+        assert "X -> X : Go;" in window.document_session.source_text
+        assert_selected("Root.A", "Go")
+        window.action_redo.trigger()
+        assert window.document_session.source_revision == 3
+        assert window.document_session.source_text == renamed
+        assert_selected("Root.A", "Run")
+
+        qtbot.mouseClick(window.event_add_button, QtCore.Qt.LeftButton)
+        assert window.document_session.source_revision == 4
+        assert 'event Stop named "Stop Event";' in window.document_session.source_text
+        assert window._get_pro_state().get_full_path() == "Root.A"
+        stop_row = next(
+            row
+            for row in range(window.event_table.rowCount())
+            if window.event_table.item(row, 1).text() == "Stop"
+        )
+        window.event_table.selectRow(stop_row)
+        monkeypatch.setattr(
+            QtWidgets.QMessageBox,
+            "question",
+            lambda *args, **kwargs: QtWidgets.QMessageBox.Yes,
+        )
+        qtbot.mouseClick(window.event_delete_button, QtCore.Qt.LeftButton)
+        assert window.document_session.source_revision == 5
+        assert "event Stop" not in window.document_session.source_text
+        assert window.event_table.rowCount() == 1
+
+    def test_imported_event_is_read_only_and_opens_physical_source_tab(
+        self, monkeypatch, qtbot, window, tmp_path
+    ):
+        child = tmp_path / "child.fcstm"
+        child.write_text(
+            'state Child { event Go named "Child Go"; state A; state B; '
+            "[*] -> A; A -> B : Go; }",
+            encoding="utf-8",
+        )
+        source = tmp_path / "root.fcstm"
+        source.write_text(
+            'state Root { import "./child.fcstm" as First; [*] -> First; }',
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            QtWidgets.QFileDialog,
+            "getOpenFileName",
+            lambda *args, **kwargs: (str(source), "fcstm Files (*.fcstm)"),
+        )
+        with qtbot.waitSignal(window.document_load_finished, timeout=3000):
+            window._import_statechart()
+        imported_items = window.tree_all_state.findItems(
+            "First", QtCore.Qt.MatchExactly | QtCore.Qt.MatchRecursive
+        )
+        assert imported_items
+        window.tree_all_state.setCurrentItem(imported_items[0])
+
+        assert window.event_table.rowCount() == 1
+        assert window.event_table.item(0, 0).text() == "Root.First"
+        assert window.event_table.item(0, 6).text() == "只读"
+        assert window.event_reference_table.rowCount() == 1
+        assert not window.event_edit_button.isEnabled()
+        assert not window.event_delete_button.isEnabled()
+        assert window.event_open_source_button.isEnabled()
+        qtbot.mouseClick(
+            window.event_open_source_button, QtCore.Qt.LeftButton
+        )
+        editor = window.workspace_tabs.currentWidget().findChild(
+            QtWidgets.QPlainTextEdit, "imported_source_editor"
+        )
+        assert editor is not None
+        assert editor.isReadOnly()
+        assert editor.textCursor().selectedText().startswith("event Go")
+        assert (
+            window.workspace_tabs.currentWidget().property("source_uri")
+            == child.resolve().as_uri()
+        )
+
+    def test_read_only_event_edit_offers_open_source(
+        self, monkeypatch, qtbot, window, tmp_path
+    ):
+        child = tmp_path / "child.fcstm"
+        child.write_text(
+            "state Child { event Go; state A; [*] -> A; }", encoding="utf-8"
+        )
+        source = tmp_path / "root.fcstm"
+        source.write_text(
+            'state Root { import "./child.fcstm" as Imported; [*] -> Imported; }',
+            encoding="utf-8",
+        )
+        session = window.document_service.load(source)
+        window._set_active_document_session(session)
+        imported = window.tree_all_state.findItems(
+            "Imported", QtCore.Qt.MatchExactly | QtCore.Qt.MatchRecursive
+        )[0]
+        window.tree_all_state.setCurrentItem(imported)
+        monkeypatch.setattr(
+            QtWidgets.QMessageBox,
+            "question",
+            lambda *args, **kwargs: QtWidgets.QMessageBox.Yes,
+        )
+
+        assert window._edit_event()
+        editor = window.workspace_tabs.currentWidget().findChild(
+            QtWidgets.QPlainTextEdit, "imported_source_editor"
+        )
+        assert editor.textCursor().selectedText().startswith("event Go")
+        assert window.workspace_tabs.currentWidget().property(
+            "source_uri"
+        ) == child.resolve().as_uri()
+
+    def test_imported_event_source_is_keyboard_reachable(
+        self, qtbot, window, tmp_path
+    ):
+        child = tmp_path / "keyboard-child.fcstm"
+        child.write_text(
+            "state Child { event Go; state A; [*] -> A; }", encoding="utf-8"
+        )
+        source = tmp_path / "keyboard-root.fcstm"
+        source.write_text(
+            'state Root { import "./keyboard-child.fcstm" as Imported; '
+            "[*] -> Imported; }",
+            encoding="utf-8",
+        )
+        window._set_active_document_session(window.document_service.load(source))
+        item = window.tree_all_state.findItems(
+            "Imported", QtCore.Qt.MatchExactly | QtCore.Qt.MatchRecursive
+        )[0]
+        window.tree_all_state.setCurrentItem(item)
+        window.show()
+        window.activateWindow()
+        QtWidgets.QApplication.processEvents()
+        window.workspace_tabs.setCurrentWidget(window.model_workspace)
+        window.event_table.setFocus()
+        QtWidgets.QApplication.processEvents()
+
+        qtbot.keyClick(window.event_table, QtCore.Qt.Key_Return, QtCore.Qt.ControlModifier)
+
+        editor = window.workspace_tabs.currentWidget().findChild(
+            QtWidgets.QPlainTextEdit, "imported_source_editor"
+        )
+        assert editor is not None
+        assert editor.hasFocus()
+        assert editor.textCursor().selectedText().startswith("event Go")
+        window.hide()
+
+    def test_import_mapping_delete_conflict_offers_keyboard_open_source(
+        self, monkeypatch, window, tmp_path
+    ):
+        child = tmp_path / "mapping-child.fcstm"
+        child.write_text(
+            "state Child { event Go; state A; [*] -> A; }", encoding="utf-8"
+        )
+        source = tmp_path / "mapping-root.fcstm"
+        original = (
+            'state Root { event Target; import "./mapping-child.fcstm" as Mod { '
+            "event /Go -> Target; } [*] -> Mod; }"
+        )
+        source.write_text(original, encoding="utf-8")
+        window._set_active_document_session(window.document_service.load(source))
+        window.tree_all_state.setCurrentItem(window.tree_all_state.topLevelItem(0))
+        prompts = []
+        monkeypatch.setattr(
+            QtWidgets.QMessageBox,
+            "question",
+            lambda *args, **kwargs: (
+                prompts.append(args), QtWidgets.QMessageBox.Yes
+            )[1],
+        )
+
+        assert not window._delete_event()
+        assert "import 事件映射" in prompts[0][2]
+        assert window.document_session.source_text == original
+        assert window.workspace_tabs.currentWidget() is window.source_workspace
+        assert window.source_editor.textCursor().selectedText() == "Target"
+        assert window.event_reference_table.item(0, 0).text() == "import 映射"
+
+    def test_event_transaction_preview_shows_before_after_and_location(
+        self, monkeypatch, qtbot, window, tmp_path
+    ):
+        source = tmp_path / "preview.fcstm"
+        source.write_text(
+            'state Root { event Go named "Before"; state A; [*] -> A; }',
+            encoding="utf-8",
+        )
+        session = window.document_service.load(source)
+        window._set_active_document_session(session)
+        window.tree_all_state.setCurrentItem(window.tree_all_state.topLevelItem(0))
+        monkeypatch.setattr(
+            window, "_prompt_event", lambda *args: ("Run", "After")
+        )
+        observed = {}
+
+        def inspect_preview(dialog):
+            observed["location"] = dialog.findChild(
+                QtWidgets.QLabel, "event_transaction_location"
+            ).text()
+            observed["summary"] = dialog.findChild(
+                QtWidgets.QLabel, "event_transaction_summary"
+            ).text()
+            observed["before"] = dialog.findChild(
+                QtWidgets.QPlainTextEdit, "event_transaction_before"
+            ).toPlainText()
+            observed["after"] = dialog.findChild(
+                QtWidgets.QPlainTextEdit, "event_transaction_after"
+            ).toPlainText()
+            return QtWidgets.QDialog.Accepted
+
+        monkeypatch.setattr(QtWidgets.QDialog, "exec_", inspect_preview)
+
+        assert window._edit_event()
+        assert "声明位置：1:" in observed["location"]
+        assert "项源码修改" in observed["summary"]
+        assert 'event Go named "Before";' in observed["before"]
+        assert 'event Run named "After";' in observed["after"]
+        assert 'event Run named "After";' in window.document_session.source_text
+
+    def test_source_navigation_uses_qt_offsets_after_emoji_prefix(
+        self, qtbot, window, tmp_path
+    ):
+        source = tmp_path / "emoji.fcstm"
+        source.write_text(
+            '// emoji 😀\nstate Root { event Go; state A; [*] -> A; }',
+            encoding="utf-8",
+        )
+        session = window.document_service.load(source, encoding="utf-8")
+        window._set_active_document_session(session)
+        window.tree_all_state.setCurrentItem(window.tree_all_state.topLevelItem(0))
+
+        assert window._open_event_source()
+        assert window.source_editor.textCursor().selectedText().startswith("event Go")
+
+    def test_referenced_event_delete_requires_explicit_transition_deletion(
+        self, monkeypatch, qtbot, window, tmp_path
+    ):
+        source = tmp_path / "delete-event.fcstm"
+        source.write_text(
+            "state Root { event Go; state A; state B; "
+            "[*] -> A; A -> B : Go; }",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            QtWidgets.QFileDialog,
+            "getOpenFileName",
+            lambda *args, **kwargs: (str(source), "fcstm Files (*.fcstm)"),
+        )
+        with qtbot.waitSignal(window.document_load_finished, timeout=3000):
+            window._import_statechart()
+        window.tree_all_state.setCurrentItem(window.tree_all_state.topLevelItem(0))
+
+        answers = iter((QtWidgets.QMessageBox.No, QtWidgets.QMessageBox.Yes))
+        monkeypatch.setattr(
+            QtWidgets.QMessageBox,
+            "question",
+            lambda *args, **kwargs: next(answers),
+        )
+        monkeypatch.setattr(
+            window, "_confirm_event_transaction", lambda *args: True
+        )
+        qtbot.mouseClick(window.event_delete_button, QtCore.Qt.LeftButton)
+        assert "event Go;" in window.document_session.source_text
+        assert "A -> B : Go;" in window.document_session.source_text
+
+        qtbot.mouseClick(window.event_delete_button, QtCore.Qt.LeftButton)
+        assert "event Go;" not in window.document_session.source_text
+        assert "A -> B : Go;" not in window.document_session.source_text
+        assert "[*] -> A;" in window.document_session.source_text
+
+    def test_workbench_shell_uses_left_right_bottom_docks_and_central_tabs(
+        self, monkeypatch, qtbot, window, tmp_path
+    ):
+        source = tmp_path / "workbench.fcstm"
+        source.write_text("state Workbench;", encoding="utf-8")
+        monkeypatch.setattr(
+            QtWidgets.QFileDialog,
+            "getOpenFileName",
+            lambda *args, **kwargs: (str(source), "fcstm Files (*.fcstm)"),
+        )
+        window.resize(1280, 720)
+        window.show()
+        QtWidgets.QApplication.processEvents()
+        with qtbot.waitSignal(window.document_load_finished, timeout=3000):
+            window._import_statechart()
+        QtWidgets.QApplication.processEvents()
+
+        assert (
+            window.dockWidgetArea(window.model_explorer_dock)
+            == QtCore.Qt.LeftDockWidgetArea
+        )
+        assert (
+            window.dockWidgetArea(window.property_inspector_dock)
+            == QtCore.Qt.RightDockWidgetArea
+        )
+        assert (
+            window.dockWidgetArea(window.task_result_dock)
+            == QtCore.Qt.BottomDockWidgetArea
+        )
+        assert window.model_explorer_dock.isVisible()
+        assert window.property_inspector_dock.isVisible()
+        assert window.tree_all_state.currentItem() is window.tree_all_state.topLevelItem(0)
+        assert window.property_path_label.text() == "状态：Workbench"
+        assert window.model_explorer_dock.isAncestorOf(window.tree_all_state)
+        assert window.model_workspace.isAncestorOf(window.frame_state_machine_info)
+        assert window.source_workspace.isAncestorOf(window.source_editor)
+        assert window.model_scroll_area.isVisible()
+        assert window.event_table.height() >= 60
+        assert window.event_reference_table.height() >= 60
+        assert window.task_result_dock.isVisible()
+        assert 150 <= window.task_result_dock.height() <= 230
+        assert [
+            window.workspace_tabs.tabText(index)
+            for index in range(6)
+        ] == ["模型", "源码", "图形", "检查", "普通仿真", "动态验证"]
+        assert window.task_result_dock.sizeHint().height() <= 220
+        assert window.width() >= 1280 and window.height() >= 720
+
+    def test_workbench_structure_is_owned_by_generated_ui(
+        self, monkeypatch, qtbot, tmp_path
+    ):
+        monkeypatch.setattr(
+            main_window.AppMainWindow, "_init_workbench_layout", lambda self: None
+        )
+        settings = QtCore.QSettings(
+            str(tmp_path / "static-ui.ini"), QtCore.QSettings.IniFormat
+        )
+        static_window = main_window.AppMainWindow(settings=settings)
+        qtbot.addWidget(static_window)
+
+        assert static_window.workspace_tabs is static_window.workbench_tabs
+        assert static_window.frame_all_state is static_window.model_explorer_panel
+        assert static_window.model_workspace.isAncestorOf(
+            static_window.frame_state_machine_info
+        )
+        assert static_window.source_workspace.isAncestorOf(
+            static_window.source_editor
+        )
+        assert static_window.findChild(QtWidgets.QDockWidget, "source_dock") is None
+        for object_name in (
+            "document_status_strip",
+            "workbench_tabs",
+            "model_workspace",
+            "model_scroll_area",
+            "model_scroll_content",
+            "source_workspace",
+            "graph_workspace",
+            "diagnostics_workspace",
+            "simulation_workspace",
+            "dynamic_validation_workspace",
+            "source_editor",
+            "model_explorer_dock",
+            "model_explorer_panel",
+            "property_inspector_dock",
+            "property_inspector",
+        ):
+            assert len(static_window.findChildren(QtCore.QObject, object_name)) == 1
+
+    def test_core_workbench_controls_have_accessible_names_and_tooltips(
+        self, window
+    ):
+        for widget in (
+            window.tree_all_state,
+            window.edit_var_def,
+            window.table_lifecycle,
+            window.table_transition,
+            window.button_initial_import_state_machine,
+            window.button_initial_new_state_machine,
+            window.button_fold_all_state,
+            window.button_expand_all_state,
+        ):
+            assert widget.accessibleName()
+            assert widget.toolTip()
+        for table in (
+            window.table_lifecycle,
+            window.table_transition,
+            window.event_table,
+            window.event_reference_table,
+            window.task_result_dock.table,
+        ):
+            assert all(
+                table.horizontalHeaderItem(column).text()
+                for column in range(table.columnCount())
+            )
+
+    def test_core_keyboard_actions_accessibility_and_tab_order(self, qtbot, window):
+        for button in (
+            window.button_add_state,
+            window.button_lifecycle,
+            window.button_transition,
+            window.button_fold_all_state,
+            window.button_expand_all_state,
+        ):
+            assert button.accessibleName()
+            assert button.toolTip()
+        for button in window.findChildren(QtWidgets.QAbstractButton):
+            if not button.icon().isNull():
+                assert button.accessibleName(), button.objectName()
+                assert button.toolTip(), button.objectName()
+
+        assert window.action_import_state_machine.shortcut() == QtGui.QKeySequence.Open
+        assert window.action_find.shortcut() == QtGui.QKeySequence.Find
+        assert window.action_validate_state_machine.shortcut().toString() == "F5"
+        assert window.action_stop_task.shortcut().toString() == "Shift+F5"
+        assert window.action_open_event_source.shortcut().toString() == "Ctrl+Return"
+        assert window.button_add_state.nextInFocusChain() is window.button_fold_all_state
+        assert window.button_fold_all_state.nextInFocusChain() is window.button_expand_all_state
+
+        window.show()
+        window.activateWindow()
+        QtWidgets.QApplication.processEvents()
+        window.action_find.trigger()
+        QtWidgets.QApplication.processEvents()
+        assert window.workspace_tabs.currentWidget() is window.source_workspace
+        assert window.source_editor.hasFocus()
+        window.hide()
+
+    def test_long_document_name_is_elided_and_dirty_state_is_explicit(
+        self, monkeypatch, qtbot, window, tmp_path
+    ):
+        source = tmp_path / (("very-long-model-name-" * 8) + ".fcstm")
+        source.write_text(
+            "state Root { state A; [*] -> A; A -> [*]; }", encoding="utf-8"
+        )
+        monkeypatch.setattr(
+            QtWidgets.QFileDialog,
+            "getOpenFileName",
+            lambda *args, **kwargs: (str(source), "fcstm Files (*.fcstm)"),
+        )
+        window.resize(1280, 720)
+        window.show()
+        with qtbot.waitSignal(window.document_load_finished, timeout=3000):
+            window._import_statechart()
+        QtWidgets.QApplication.processEvents()
+
+        assert window.document_name_label.text() != source.name
+        assert "…" in window.document_name_label.text()
+        assert window.document_name_label.toolTip() != str(source)
+        assert "<TEMP>" in window.document_name_label.toolTip()
+        window.task_result_dock.show_full_paths_action.setChecked(True)
+        assert window.document_name_label.toolTip() == str(source)
+        window.task_result_dock.show_full_paths_action.setChecked(False)
+        assert window.document_name_label.toolTip() != str(source)
+        assert window.document_dirty_label.text() == "已保存"
+        state = window.state_manager.get_state_by_path("Root.A")
+        assert window._rename_projected_state(state, "Ready")
+        assert window.document_dirty_label.text() == "未保存"
+        window.hide()
+
+    def test_imported_source_workspace_is_reused_for_multiple_physical_files(
+        self, monkeypatch, qtbot, window, tmp_path
+    ):
+        first = tmp_path / "first.fcstm"
+        second = tmp_path / "second.fcstm"
+        first.write_text(
+            "state FirstState { event Go; state A; [*] -> A; }",
+            encoding="utf-8",
+        )
+        second.write_text(
+            "state SecondState { event Stop; state B; [*] -> B; }",
+            encoding="utf-8",
+        )
+        source = tmp_path / "root.fcstm"
+        source.write_text(
+            'state Root { import "./first.fcstm" as First; '
+            'import "./second.fcstm" as Second; [*] -> First; }',
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            QtWidgets.QFileDialog,
+            "getOpenFileName",
+            lambda *args, **kwargs: (str(source), "fcstm Files (*.fcstm)"),
+        )
+        with qtbot.waitSignal(window.document_load_finished, timeout=3000):
+            window._import_statechart()
+
+        for alias, expected_uri in (
+            ("First", first.resolve().as_uri()),
+            ("Second", second.resolve().as_uri()),
+        ):
+            item = window.tree_all_state.findItems(
+                alias, QtCore.Qt.MatchExactly | QtCore.Qt.MatchRecursive
+            )[0]
+            window.tree_all_state.setCurrentItem(item)
+            qtbot.mouseClick(
+                window.event_open_source_button, QtCore.Qt.LeftButton
+            )
+            assert window.workspace_tabs.currentWidget().property("source_uri") == expected_uri
+
+        assert len(
+            window.findChildren(QtWidgets.QWidget, "imported_source_workspace")
+        ) == 1
+        assert len(
+            window.findChildren(QtWidgets.QPlainTextEdit, "imported_source_editor")
+        ) == 1
 
     def test_loaded_projection_modify_delete_and_import_read_only(
         self, monkeypatch, qtbot, window, tmp_path

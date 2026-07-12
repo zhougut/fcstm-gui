@@ -228,6 +228,8 @@ class SourceRef:
     owner_path: Tuple[str, ...]
     range_sha256: str
     deletion_replacement: str = ""
+    resolved_path: Tuple[str, ...] = ()
+    scope: Optional[str] = None
 
     @property
     def read_only(self) -> bool:
@@ -270,6 +272,7 @@ class SourceProjection:
     projected_owner_path: Tuple[str, ...]
     ownership: str = "imported"
     editable: bool = False
+    projected_resolved_path: Tuple[str, ...] = ()
 
     @property
     def source_uri(self) -> str:

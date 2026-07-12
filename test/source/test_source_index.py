@@ -20,6 +20,10 @@ def _slices(index, kind):
     return [index.text_for_ref(ref) for ref in index.refs(kind=kind)]
 
 
+def _ref_slices(index, kind):
+    return [(index.text_for_ref(ref), ref) for ref in index.refs(kind=kind)]
+
+
 def test_indexes_exact_root_declarations_and_raw_transition_forms(tmp_path):
     source = """def int x = 0;
 state Root {
@@ -57,6 +61,231 @@ state Root {
     assert all(ref.ownership == "root" for ref in index.refs())
     assert all(index.text_for_ref(ref) for ref in index.refs())
     assert all(len(ref.range_sha256) == 64 for ref in index.refs())
+
+
+def test_event_names_are_exact_owner_qualified_declaration_refs(tmp_path):
+    source = """state Root {
+    event Go named "Go";
+    state A { event Go; }
+    state B { event Go; }
+}
+"""
+    path = tmp_path / "events.fcstm"
+    path.write_text(source, encoding="utf-8")
+
+    index = build_source_index(path)
+    event_names = index.refs(kind="event_name")
+
+    assert [index.text_for_ref(ref) for ref in event_names] == ["Go", "Go", "Go"]
+    assert [ref.owner_path for ref in event_names] == [
+        ("Root",),
+        ("Root", "A"),
+        ("Root", "B"),
+    ]
+    assert [ref.resolved_path for ref in event_names] == [
+        ("Root", "Go"),
+        ("Root", "A", "Go"),
+        ("Root", "B", "Go"),
+    ]
+    assert all(ref.scope == "declaration" for ref in event_names)
+    assert len({ref.stable_key for ref in event_names}) == 3
+    for name_ref in event_names:
+        assert name_ref.declaration_ref.kind == "event"
+        assert index.text_for_declaration(name_ref.declaration_ref).startswith(
+            "event Go"
+        )
+
+
+def test_event_display_name_and_named_clause_refs_preserve_exact_trivia(tmp_path):
+    source = (
+        "state Root {\r\n"
+        "    event Go // keep this comment\r\n"
+        "        named \"Go Event\";\r\n"
+        "    event Stop;\r\n"
+        "}\r\n"
+    )
+    path = tmp_path / "event-display.fcstm"
+    path.write_bytes(source.encode("utf-8"))
+
+    index = build_source_index(path)
+
+    assert _slices(index, "event_display_name") == ['"Go Event"']
+    assert _slices(index, "event_named_keyword") == ["named"]
+    assert _slices(index, "event_named_clause") == ['named "Go Event"']
+    anchors = index.refs(kind="event_named_anchor")
+    assert len(anchors) == 1
+    assert index.text_for_ref(anchors[0]) == ";"
+    assert anchors[0].span.start_offset == source.index(";", source.index("event Stop"))
+
+
+def test_import_event_mapping_endpoints_have_exact_resolved_refs(tmp_path):
+    child = tmp_path / "child.fcstm"
+    child.write_text(
+        "state Child { event Go; state A; state B; [*] -> A; A -> B : Go; }",
+        encoding="utf-8",
+    )
+    root = tmp_path / "root.fcstm"
+    root.write_text(
+        'state Root { event Target; import "./child.fcstm" as First { '
+        "event /Go -> Target; } [*] -> First; }",
+        encoding="utf-8",
+    )
+
+    index = build_source_index(root)
+    source_ref = index.refs(kind="import_event_source")[0]
+    target_ref = index.refs(kind="import_event_target")[0]
+
+    assert index.text_for_ref(source_ref) == "/Go"
+    assert source_ref.resolved_path == ("Root", "First", "Go")
+    assert source_ref.scope == "mapping_source"
+    assert index.text_for_ref(target_ref) == "Target"
+    assert target_ref.resolved_path == ("Root", "Target")
+    assert target_ref.scope == "mapping_target_chain"
+    assert source_ref.declaration_ref == target_ref.declaration_ref
+    assert source_ref.declaration_ref.kind == "import"
+    assert source_ref.editable and target_ref.editable
+
+
+def test_nested_import_mapping_target_does_not_resolve_to_ancestor_event(tmp_path):
+    child = tmp_path / "child.fcstm"
+    child.write_text(
+        "state Child { event Go; state A; [*] -> A; }", encoding="utf-8"
+    )
+    root = tmp_path / "root.fcstm"
+    root.write_text(
+        'state Root { event Target; state Host { event Target; '
+        'import "./child.fcstm" as First { event /Go -> Target; } '
+        '[*] -> First; } [*] -> Host; }',
+        encoding="utf-8",
+    )
+
+    index = build_source_index(root)
+    target_ref = index.refs(kind="import_event_target")[0]
+
+    assert index.text_for_ref(target_ref) == "Target"
+    assert target_ref.resolved_path == ("Root", "Host", "Target")
+
+
+def test_event_uses_preserve_exact_scope_and_model_resolved_path(tmp_path):
+    from pyfcstm.model import load_state_machine_from_file
+
+    source = """state Root {
+    event Go;
+    state A {
+        event Local;
+        state X;
+        state Y;
+        [*] -> X;
+        X -> Y :: Fire;
+        Y -> X : Local;
+    }
+    state B;
+    [*] -> A;
+    A -> B : Go;
+    B -> A : /Go;
+}
+"""
+    path = tmp_path / "scopes.fcstm"
+    path.write_text(source, encoding="utf-8")
+
+    index = build_source_index(path)
+    uses = _ref_slices(index, "event_use")
+
+    assert [(text, ref.scope, ref.owner_path, ref.resolved_path) for text, ref in uses] == [
+        ("Fire", "local", ("Root", "A"), ("Root", "A", "X", "Fire")),
+        ("Local", "chain", ("Root", "A"), ("Root", "A", "Local")),
+        ("Go", "chain", ("Root",), ("Root", "Go")),
+        ("/Go", "absolute", ("Root",), ("Root", "Go")),
+    ]
+    assert all(
+        ref.declaration_ref.kind in {"transition", "combo_transition"}
+        for _, ref in uses
+    )
+
+    model = load_state_machine_from_file(path)
+    model_paths = {
+        (transition.event_scope, transition.event.path_name)
+        for state in model.walk_states()
+        for transition in state.transitions
+        if transition.event is not None
+        and transition.event_scope in {"local", "chain", "absolute"}
+    }
+    assert {(ref.scope, ".".join(ref.resolved_path)) for _, ref in uses} <= model_paths
+
+
+def test_combo_and_forced_event_uses_link_one_raw_declaration_without_dedup(tmp_path):
+    source = """state Root {
+    event Go;
+    event Stop;
+    state A;
+    state B;
+    [*] -> A;
+    A -> B : Go + Stop + Go;
+    ! A -> B :: Fire;
+    ! * -> B : Stop;
+}
+"""
+    path = tmp_path / "raw-event-uses.fcstm"
+    path.write_text(source, encoding="utf-8")
+
+    index = build_source_index(path)
+    uses = index.refs(kind="event_use")
+    combo = index.refs(kind="combo_transition")[0]
+    forced = index.refs(kind="forced_transition")
+
+    assert [index.text_for_ref(ref) for ref in uses] == [
+        "Go",
+        "Stop",
+        "Go",
+        "Fire",
+        "Stop",
+    ]
+    assert len({ref.stable_key for ref in uses}) == 5
+    assert [ref.declaration_ref for ref in uses[:3]] == [combo.declaration_ref] * 3
+    assert [ref.declaration_ref for ref in uses[3:]] == [
+        ref.declaration_ref for ref in forced
+    ]
+    assert uses[3].scope == "local"
+    assert uses[3].resolved_path == ("Root", "A", "Fire")
+    assert all(ref.resolved_path[:1] == ("Root",) for ref in uses)
+
+
+def test_imported_event_refs_are_physical_read_only_with_projection_provenance(
+    tmp_path,
+):
+    child = tmp_path / "child.fcstm"
+    child.write_text(
+        "state Child { event Go; state A; state B; [*] -> A; A -> B : Go; }",
+        encoding="utf-8",
+    )
+    root = tmp_path / "root.fcstm"
+    root.write_text(
+        'state Root { import "./child.fcstm" as First; '
+        'import "./child.fcstm" as Second; }',
+        encoding="utf-8",
+    )
+
+    index = build_source_index(root)
+    imported_refs = tuple(
+        ref
+        for ref in index.refs()
+        if ref.kind in {"event_name", "event_use"} and ref.ownership == "imported"
+    )
+
+    assert {index.text_for_ref(ref) for ref in imported_refs} == {"Go"}
+    assert all(ref.read_only for ref in imported_refs)
+    assert all(ref.source_uri == child.resolve().as_uri() for ref in imported_refs)
+    for ref in imported_refs:
+        projections = index.projections_for_ref(ref)
+        assert {projection.alias_chain for projection in projections} == {
+            ("First",),
+            ("Second",),
+        }
+        assert all(projection.physical_ref == ref for projection in projections)
+        assert {projection.projected_resolved_path for projection in projections} == {
+            ("Root", "First", "Go"),
+            ("Root", "Second", "Go"),
+        }
 
 
 def test_transitive_imports_are_read_only_and_fingerprinted(tmp_path):

@@ -691,6 +691,8 @@ def _index_document(
         stable_key: str,
         declaration_ref: DeclarationRef,
         deletion_replacement: str = "",
+        resolved_path: Tuple[str, ...] = (),
+        scope: Optional[str] = None,
     ) -> SourceRef:
         source_text = document.text[start:end]
         source_span = _offset_span(document, start, end)
@@ -711,9 +713,93 @@ def _index_document(
                 source_text.encode("utf-8")
             ).hexdigest(),
             deletion_replacement=deletion_replacement,
+            resolved_path=resolved_path,
+            scope=scope,
         )
         refs.append(ref)
         return ref
+
+    explicit_event_paths = set()  # type: set
+    root_state_name = ""
+
+    def collect_event_paths(
+        context: ParserRuleContext,
+        owner_path: Tuple[str, ...] = (),
+    ) -> None:
+        nonlocal root_state_name
+        rule = _rule_name(context)
+        current_owner = owner_path
+        if rule == "state_definition":
+            state_name = _token_text(context, "state_id") or "<state>"
+            current_owner = owner_path + (state_name,)
+            if not root_state_name:
+                root_state_name = state_name
+        elif rule == "event_definition":
+            event_name = _token_text(context, "event_name") or "<event>"
+            explicit_event_paths.add(owner_path + (event_name,))
+        for child in context.getChildren():
+            if isinstance(child, ParserRuleContext):
+                collect_event_paths(child, current_owner)
+
+    collect_event_paths(tree)
+
+    def resolve_event_path(
+        owner_path: Tuple[str, ...],
+        path: Tuple[str, ...],
+        scope: str,
+        source_state: Optional[str] = None,
+    ) -> Tuple[str, ...]:
+        if scope == "local":
+            if source_state is None:
+                raise SourceIndexError("local event use has no source state")
+            return owner_path + (source_state,) + path
+        if scope == "absolute":
+            return (root_state_name,) + path
+        for length in range(len(owner_path), 0, -1):
+            candidate = owner_path[:length] + path
+            if candidate in explicit_event_paths:
+                return candidate
+        return owner_path + path
+
+    def event_use_key(
+        declaration_ref: DeclarationRef,
+        owner_path: Tuple[str, ...],
+        scope: str,
+        event_path: Tuple[str, ...],
+    ) -> str:
+        return event_reference_key(
+            "event_use", declaration_ref, owner_path, scope, event_path
+        )
+
+    def event_reference_key(
+        kind: str,
+        declaration_ref: DeclarationRef,
+        owner_path: Tuple[str, ...],
+        scope: str,
+        event_path: Tuple[str, ...],
+    ) -> str:
+        semantic_base = "{}/{}/{}/{}".format(
+            declaration_ref.stable_key,
+            kind,
+            scope,
+            ".".join(event_path),
+        )
+        ordinal_key = (kind, owner_path, semantic_base)
+        ordinal = ordinals[ordinal_key]
+        ordinals[ordinal_key] += 1
+        if ordinal:
+            return "{}#{}".format(semantic_base, ordinal)
+        return semantic_base
+
+    def ancestor_context(
+        context: ParserRuleContext, rule_name: str
+    ) -> Optional[ParserRuleContext]:
+        current = context.parentCtx
+        while isinstance(current, ParserRuleContext):
+            if _rule_name(current) == rule_name:
+                return current
+            current = current.parentCtx
+        return None
 
     def walk(
         context: ParserRuleContext,
@@ -751,6 +837,63 @@ def _index_document(
             event_ref = add_ref(context, "event", owner_path, current_key)
             current_declaration_ref = event_ref.declaration_ref
             current_kind = "event"
+            event_token = getattr(context, "event_name", None)
+            if event_token is not None:
+                add_offset_ref(
+                    event_token.start,
+                    event_token.stop + 1,
+                    "event_name",
+                    owner_path,
+                    current_key + "/name",
+                    current_declaration_ref,
+                    resolved_path=owner_path + (name,),
+                    scope="declaration",
+                )
+            extra_name = getattr(context, "extra_name", None)
+            if extra_name is not None:
+                named = context.NAMED().getSymbol()
+                add_offset_ref(
+                    extra_name.start,
+                    extra_name.stop + 1,
+                    "event_display_name",
+                    owner_path,
+                    current_key + "/display_name",
+                    current_declaration_ref,
+                    resolved_path=owner_path + (name,),
+                    scope="declaration",
+                )
+                add_offset_ref(
+                    named.start,
+                    named.stop + 1,
+                    "event_named_keyword",
+                    owner_path,
+                    current_key + "/named_keyword",
+                    current_declaration_ref,
+                    resolved_path=owner_path + (name,),
+                    scope="declaration",
+                )
+                add_offset_ref(
+                    named.start,
+                    extra_name.stop + 1,
+                    "event_named_clause",
+                    owner_path,
+                    current_key + "/named_clause",
+                    current_declaration_ref,
+                    resolved_path=owner_path + (name,),
+                    scope="declaration",
+                )
+            else:
+                semicolon = context.SEMI().getSymbol()
+                add_offset_ref(
+                    semicolon.start,
+                    semicolon.stop + 1,
+                    "event_named_anchor",
+                    owner_path,
+                    current_key + "/named_anchor",
+                    current_declaration_ref,
+                    resolved_path=owner_path + (name,),
+                    scope="declaration",
+                )
         elif rule == "transition_definition":
             kind = (
                 "combo_transition"
@@ -795,6 +938,95 @@ def _index_document(
             )
             current_declaration_ref = forced_ref.declaration_ref
             current_kind = "forced_transition"
+            chain_context = context.chain_id()
+            from_id = getattr(context, "from_id", None)
+            if chain_context is not None:
+                raw_path = chain_context.getText()
+                scope = "absolute" if raw_path.startswith("/") else "chain"
+                event_path = tuple(raw_path.lstrip("/").split("."))
+                add_offset_ref(
+                    chain_context.start.start,
+                    chain_context.stop.stop + 1,
+                    "event_use",
+                    owner_path,
+                    event_use_key(
+                        current_declaration_ref, owner_path, scope, event_path
+                    ),
+                    current_declaration_ref,
+                    resolved_path=resolve_event_path(
+                        owner_path, event_path, scope
+                    ),
+                    scope=scope,
+                )
+            elif from_id is not None:
+                from_state = _token_text(context, "from_state")
+                event_path = (from_id.text,)
+                add_offset_ref(
+                    from_id.start,
+                    from_id.stop + 1,
+                    "event_use",
+                    owner_path,
+                    event_use_key(
+                        current_declaration_ref, owner_path, "local", event_path
+                    ),
+                    current_declaration_ref,
+                    resolved_path=resolve_event_path(
+                        owner_path,
+                        event_path,
+                        "local",
+                        source_state=from_state,
+                    ),
+                    scope="local",
+                )
+        elif rule in {"local_combo_event_term", "combo_event_term"}:
+            if current_declaration_ref is None:
+                raise SourceIndexError("event use is missing its raw declaration")
+            if rule == "local_combo_event_term":
+                terminal = context.ID()
+                transition_context = ancestor_context(
+                    context, "transition_definition"
+                )
+                source_state = (
+                    _token_text(transition_context, "from_state")
+                    if transition_context is not None
+                    else None
+                )
+                event_path = (terminal.getText(),)
+                scope = "local"
+                resolved_path = resolve_event_path(
+                    owner_path,
+                    event_path,
+                    scope,
+                    source_state=source_state,
+                )
+            else:
+                terminal = context.chain_id()
+                raw_path = terminal.getText()
+                event_path = tuple(raw_path.lstrip("/").split("."))
+                scope = "absolute" if raw_path.startswith("/") else "chain"
+                resolved_path = resolve_event_path(
+                    owner_path, event_path, scope
+                )
+            add_offset_ref(
+                (
+                    context.start.start
+                    if rule == "local_combo_event_term"
+                    else terminal.start.start
+                ),
+                (
+                    context.stop.stop + 1
+                    if rule == "local_combo_event_term"
+                    else terminal.stop.stop + 1
+                ),
+                "event_use",
+                owner_path,
+                event_use_key(
+                    current_declaration_ref, owner_path, scope, event_path
+                ),
+                current_declaration_ref,
+                resolved_path=resolved_path,
+                scope=scope,
+            )
         elif rule in {
             "enter_definition",
             "during_definition",
@@ -891,6 +1123,64 @@ def _index_document(
                 )
             )
             current_kind = "import"
+        elif rule == "import_event_mapping":
+            if current_declaration_ref is None:
+                raise SourceIndexError(
+                    "import event mapping is missing its import declaration"
+                )
+            import_context = ancestor_context(context, "import_statement")
+            alias = (
+                _token_text(import_context, "state_alias")
+                if import_context is not None
+                else None
+            )
+            if not alias:
+                raise SourceIndexError("import event mapping has no import alias")
+            source_event = getattr(context, "source_event", None)
+            target_event = getattr(context, "target_event", None)
+            if source_event is None or target_event is None:
+                raise SourceIndexError("import event mapping has incomplete endpoints")
+            source_raw = source_event.getText()
+            source_path = tuple(source_raw.lstrip("/").split("."))
+            target_raw = target_event.getText()
+            target_path = tuple(target_raw.lstrip("/").split("."))
+            target_scope = "absolute" if target_raw.startswith("/") else "chain"
+            add_offset_ref(
+                source_event.start.start,
+                source_event.stop.stop + 1,
+                "import_event_source",
+                owner_path,
+                event_reference_key(
+                    "import_event_source",
+                    current_declaration_ref,
+                    owner_path,
+                    "mapping_source",
+                    source_path,
+                ),
+                current_declaration_ref,
+                resolved_path=owner_path + (alias,) + source_path,
+                scope="mapping_source",
+            )
+            add_offset_ref(
+                target_event.start.start,
+                target_event.stop.stop + 1,
+                "import_event_target",
+                owner_path,
+                event_reference_key(
+                    "import_event_target",
+                    current_declaration_ref,
+                    owner_path,
+                    "mapping_target_{}".format(target_scope),
+                    target_path,
+                ),
+                current_declaration_ref,
+                resolved_path=(
+                    owner_path[:1] + target_path
+                    if target_scope == "absolute"
+                    else owner_path + target_path
+                ),
+                scope="mapping_target_{}".format(target_scope),
+            )
 
         for child in context.getChildren():
             if isinstance(child, ParserRuleContext):
@@ -1170,6 +1460,12 @@ def _build_import_projections(
                         projected_owner_path=(
                             next_prefix
                             + (ref.owner_path[1:] if ref.owner_path else ())
+                        ),
+                        projected_resolved_path=(
+                            next_prefix
+                            + ref.resolved_path[1:]
+                            if ref.resolved_path
+                            else ()
                         ),
                     )
                 )

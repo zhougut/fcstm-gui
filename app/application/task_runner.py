@@ -171,6 +171,11 @@ class TaskRunner(QtCore.QObject):
             if (handle.stamp.channel, handle.stamp.session_id) == key:
                 handle.cancel()
 
+    def supersede(self, channel: str, session_id: str = "") -> None:
+        """Mark matching work stale without treating it as user cancellation."""
+        key = (channel, session_id)
+        self._generations[key] = self._generations.get(key, 0) + 1
+
     @QtCore.pyqtSlot(object)
     def _complete(self, payload) -> None:
         handle, value, error, worker_thread_id = payload

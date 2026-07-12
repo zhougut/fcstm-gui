@@ -209,6 +209,23 @@ def test_invalidate_cancels_matching_active_task_only(qtbot):
 
 
 @pytest.mark.unittest
+def test_supersede_marks_matching_active_task_stale_without_cancelling(qtbot):
+    runner = TaskRunner()
+    release = threading.Event()
+    handle = runner.submit(
+        "inspect", 1, lambda token: release.wait(2) or "done", session_id="A"
+    )
+    runner.supersede("inspect", "A")
+    release.set()
+
+    qtbot.waitUntil(lambda: handle.result is not None, timeout=3000)
+
+    assert handle.result.status is TaskStatus.STALE
+    assert not handle.token.cancelled
+    runner.shutdown()
+
+
+@pytest.mark.unittest
 def test_new_generation_cancels_previous_and_shutdown_rejects_submit(qtbot):
     runner = TaskRunner()
     release = threading.Event()

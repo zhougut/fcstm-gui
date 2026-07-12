@@ -1,6 +1,7 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Optional, Dict, List
 import os
+import time
 import uuid
 
 import PyQt5.Qt
@@ -21,7 +22,25 @@ from app.application.document import (
     InvalidDocumentSaveError,
     TextEdit,
 )
-from app.application.task_runner import TaskResult, TaskRunner, TaskStatus
+from app.application.commands import CommandStateError, DocumentCommandStack
+from app.application.events import (
+    EventConflictError,
+    EventProjectionError,
+    EventProjectionService,
+    EventReadOnlyError,
+)
+from app.application.task_runner import (
+    TaskResult,
+    TaskRunner,
+    TaskStamp,
+    TaskStatus,
+)
+from app.application.tasks import (
+    TaskBoundary,
+    TaskCenter,
+    TaskRecord,
+    TaskStatus as HistoryTaskStatus,
+)
 from app.model.session import ValidationState
 from app.source import SourceEncodingAmbiguityError, canonical_path
 from app.utils.dsl_to_ui import (
@@ -43,6 +62,7 @@ from .dialog_show_error import DialogShowError
 from .dialog_code_gen import DialogCodeGen
 from .dialog_add_lifecycle import DialogAddLifecycle
 from .dialog_add_transition import DialogAddTransition
+from .task_result_dock import TaskResultDock
 import re
 
 
@@ -91,21 +111,44 @@ class DocumentLoadOperation(QtCore.QObject):
 class AppMainWindow(QMainWindow, UIMainWindow):
     document_load_finished = QtCore.pyqtSignal(object)
     document_validation_finished = QtCore.pyqtSignal(object)
+    model_check_finished = QtCore.pyqtSignal(object)
     state_manager: Optional[StateManager]
 
-    def __init__(self, settings=None):
+    def __init__(
+        self,
+        settings=None,
+        document_service=None,
+        task_runner=None,
+        task_center=None,
+    ):
         QMainWindow.__init__(self)
         self.setupUi(self)
+        self.workspace_tabs = self.workbench_tabs
+        self.frame_all_state = self.model_explorer_panel
         self.at_page_initial = True
         #self.fcstm_state_chart = None
         self.code_file_path = "./"
         self.state_machine_file_path = "./"
-        self.document_service = DocumentService()
+        self.document_service = document_service or DocumentService()
+        self.event_service = EventProjectionService(self.document_service)
         self.document_session = None
         self.settings = settings if settings is not None else QtCore.QSettings(
             "zhougut", "fcstm-gui"
         )
-        self.task_runner = TaskRunner(parent=self)
+        self.task_runner = task_runner or TaskRunner(
+            stamp_validator=self._task_stamp_current, parent=self
+        )
+        self.command_stack = DocumentCommandStack(service=self.document_service)
+        if task_center is None and settings is not None:
+            settings_dir = os.path.dirname(os.path.abspath(settings.fileName()))
+            task_center = TaskCenter(
+                data_location_provider=lambda: os.path.join(settings_dir, "task-data"),
+                workspace=os.getcwd(),
+            )
+        self.task_center = task_center or TaskCenter(workspace=os.getcwd())
+        self._task_history_warnings = self.task_center.load()
+        self._logical_load_operations = {}
+        self._task_handles = {}
         self._setting_source_text = False
         self._setting_projection = False
         self._document_load_requests = {}
@@ -126,6 +169,10 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         #初始化菜单栏
         self._init_menu_bar()
         self._init_source_editor()
+        self._init_workbench_layout()
+        self._init_event_panel()
+        self._init_task_result_dock()
+        self._publish_history_warnings()
         #初始化导入状态机按钮
         self._init_import_state_chart()
         self._init_tree_all_state_context_menu()
@@ -143,28 +190,81 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self._init_button_lifecycle()
         #初始化转移按钮
         self._init_button_transition()
+        self._init_keyboard_navigation()
+        self._finalize_button_accessibility()
         '''
         self._init_button_save_state()
         '''
 
     def _init_window_style(self):
         self.stackedWidget_state_machine.setCurrentIndex(0)
+        self.document_name_label.setSizePolicy(
+            QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Preferred
+        )
+        self.document_name_label.setMinimumWidth(80)
+        self.document_status_layout.setStretch(0, 1)
+        self._document_display_name = "未打开文档"
+        for widget, accessible_name in (
+            (self.tree_all_state, "模型状态树"),
+            (self.edit_var_def, "变量定义编辑器"),
+            (self.table_lifecycle, "生命周期操作表"),
+            (self.table_transition, "迁移表"),
+            (self.button_initial_import_state_machine, "导入状态机"),
+            (self.button_initial_new_state_machine, "新建状态机"),
+            (self.button_add_state, "新增状态"),
+            (self.button_lifecycle, "新增生命周期操作"),
+            (self.button_transition, "新增迁移"),
+            (self.button_fold_all_state, "折叠全部状态"),
+            (self.button_expand_all_state, "展开全部状态"),
+        ):
+            widget.setAccessibleName(accessible_name)
+            if not widget.toolTip():
+                widget.setToolTip(accessible_name)
         self._init_tree_style()
         self._init_button_style()
         self._init_text_edit_style()
         self._init_table_style()
+        for button in self.findChildren(QtWidgets.QAbstractButton):
+            if button.icon().isNull():
+                continue
+            fallback = button.text() or button.toolTip() or button.objectName()
+            if not button.accessibleName():
+                button.setAccessibleName(fallback)
+            if not button.toolTip():
+                button.setToolTip(button.accessibleName())
 
     def _init_menu_bar(self):
         """初始化菜单栏"""
         # 文件菜单
         self.menu_file.addAction(self.action_import_state_machine)
+        self.action_import_state_machine.setShortcut(QtGui.QKeySequence.Open)
         self.action_save_state_machine = QtWidgets.QAction("保存", self)
         self.action_save_state_machine.setShortcut(QtGui.QKeySequence.Save)
         self.menu_file.addAction(self.action_save_state_machine)
         self.menu_file.addAction(self.action_export_state_machine)
+
+        self.menu_edit = self.menuBar().addMenu("编辑")
+        self.action_undo = QtWidgets.QAction("撤销", self)
+        self.action_undo.setObjectName("action_undo")
+        self.action_undo.setShortcut(QtGui.QKeySequence.Undo)
+        self.action_redo = QtWidgets.QAction("重做", self)
+        self.action_redo.setObjectName("action_redo")
+        self.action_redo.setShortcut(QtGui.QKeySequence.Redo)
+        self.action_find = QtWidgets.QAction("查找", self)
+        self.action_find.setObjectName("action_find")
+        self.action_find.setShortcut(QtGui.QKeySequence.Find)
+        self.menu_edit.addAction(self.action_undo)
+        self.menu_edit.addAction(self.action_redo)
+        self.menu_edit.addAction(self.action_find)
+        self.menu_view = self.menuBar().addMenu("视图")
         
         # 工具菜单
         self.menu_tool.addAction(self.action_validate_state_machine)
+        self.action_validate_state_machine.setShortcut("F5")
+        self.action_stop_task = QtWidgets.QAction("停止当前任务", self)
+        self.action_stop_task.setObjectName("action_stop_task")
+        self.action_stop_task.setShortcut("Shift+F5")
+        self.menu_tool.addAction(self.action_stop_task)
         self.menu_tool.addAction(self.action_graph_gen)
         self.menu_tool.addAction(self.action_code_gen)
         
@@ -174,21 +274,286 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self.action_export_state_machine.triggered.connect(self._export_statechart)
         self.action_validate_state_machine.triggered.connect(self._validate_statechart)
         self.action_graph_gen.triggered.connect(self._graph_gen)
-
         self.action_code_gen.triggered.connect(self._code_gen)
+        self.action_undo.triggered.connect(self._undo_document)
+        self.action_redo.triggered.connect(self._redo_document)
+        self.action_find.triggered.connect(self._focus_find_target)
+        self.action_stop_task.triggered.connect(self._cancel_active_task)
+
+    def _init_task_result_dock(self):
+        self.task_result_dock = TaskResultDock(self.task_center, self)
+        self._task_result_dock_sized = False
+        self.task_result_dock.setAllowedAreas(Qt.BottomDockWidgetArea)
+        self.task_result_dock.setFeatures(
+            QtWidgets.QDockWidget.DockWidgetClosable
+            | QtWidgets.QDockWidget.DockWidgetMovable
+        )
+        self.addDockWidget(Qt.BottomDockWidgetArea, self.task_result_dock)
+        self.task_result_dock.retry_requested.connect(self._retry_task_record)
+        self.task_result_dock.cancel_requested.connect(self._cancel_task_record)
+        self.task_result_dock.visibilityChanged.connect(
+            self._size_task_result_dock_on_first_show
+        )
+        self.task_result_dock.show_full_paths_action.toggled.connect(
+            lambda _checked: self._update_document_actions()
+        )
+        self.task_result_dock.hide()
+        self.action_toggle_task_results = self.task_result_dock.toggleViewAction()
+        self.action_toggle_task_results.setText("任务结果")
+        self.action_toggle_task_results.setObjectName("action_toggle_task_results")
+        self.action_toggle_task_results.setShortcut("Ctrl+Shift+J")
+        self.menu_view.addAction(self.action_toggle_task_results)
+
+    def _size_task_result_dock_on_first_show(self, visible):
+        if not visible or self._task_result_dock_sized:
+            return
+        self._task_result_dock_sized = True
+        target_height = min(220, max(160, int(self.height() * 0.28)))
+        QtCore.QTimer.singleShot(
+            0,
+            lambda: self.resizeDocks(
+                [self.task_result_dock], [target_height], Qt.Vertical
+            ),
+        )
+
+    def _publish_history_warnings(self):
+        for warning in self._task_history_warnings:
+            now = time.time()
+            self.task_center.add(
+                TaskRecord(
+                    task_id="history-warning-{}".format(uuid.uuid4().hex),
+                    kind="task-history",
+                    session_id="",
+                    source_revision=0,
+                    dependency_fingerprints={},
+                    created_at=now,
+                    started_at=now,
+                    finished_at=now,
+                    status=HistoryTaskStatus.FAILED,
+                    summary="任务历史已隔离：{}".format(warning.reason),
+                    messages=(
+                        {
+                            "severity": "warning",
+                            "message": warning.reason,
+                            "quarantine_path": str(warning.quarantine_path),
+                        },
+                    ),
+                    artifacts=(),
+                    retry_descriptor=None,
+                    exception_chain=(),
+                    boundary=TaskBoundary.EXPLICIT,
+                )
+            )
+        if self._task_history_warnings:
+            try:
+                self.task_center.save()
+            except OSError:
+                pass
+            self._refresh_task_result_dock()
 
     def _init_source_editor(self):
         self.setWindowTitle("fcstm[*]")
-        self.source_dock = QtWidgets.QDockWidget("源码", self)
-        self.source_dock.setObjectName("source_dock")
-        self.source_editor = QtWidgets.QPlainTextEdit(self.source_dock)
-        self.source_editor.setObjectName("source_editor")
         self.source_editor.setLineWrapMode(QtWidgets.QPlainTextEdit.NoWrap)
-        self.source_dock.setWidget(self.source_editor)
-        self.addDockWidget(Qt.BottomDockWidgetArea, self.source_dock)
-        self.source_dock.hide()
         self.source_editor.textChanged.connect(self._on_source_text_changed)
         self.action_save_state_machine.setEnabled(False)
+
+    def _init_workbench_layout(self):
+        for page in (
+            self.graph_workspace,
+            self.diagnostics_workspace,
+            self.simulation_workspace,
+            self.dynamic_validation_workspace,
+        ):
+            self.workspace_tabs.setTabEnabled(
+                self.workspace_tabs.indexOf(page), False
+            )
+        self.model_explorer_dock.hide()
+        self.property_inspector_dock.hide()
+        self.action_toggle_model_explorer = (
+            self.model_explorer_dock.toggleViewAction()
+        )
+        self.action_toggle_model_explorer.setText("模型资源管理器")
+        self.action_toggle_model_explorer.setObjectName(
+            "action_toggle_model_explorer"
+        )
+        self.action_toggle_model_explorer.setShortcut("Ctrl+Shift+E")
+        self.action_toggle_property_inspector = (
+            self.property_inspector_dock.toggleViewAction()
+        )
+        self.action_toggle_property_inspector.setText("属性检查器")
+        self.action_toggle_property_inspector.setObjectName(
+            "action_toggle_property_inspector"
+        )
+        self.action_toggle_property_inspector.setShortcut("Ctrl+Shift+P")
+        self.menu_view.addAction(self.action_toggle_model_explorer)
+        self.menu_view.addAction(self.action_toggle_property_inspector)
+        self.setCorner(Qt.BottomLeftCorner, Qt.BottomDockWidgetArea)
+        self.setCorner(Qt.BottomRightCorner, Qt.BottomDockWidgetArea)
+
+    def _init_event_panel(self):
+        self.event_group = QtWidgets.QGroupBox("事件", self.model_workspace)
+        self.event_group.setObjectName("event_group")
+        self.event_group.setAccessibleName("事件编辑器")
+        self.event_group.setMinimumHeight(190)
+        event_layout = QtWidgets.QVBoxLayout(self.event_group)
+        self.event_table = QtWidgets.QTableWidget(self.event_group)
+        self.event_table.setObjectName("event_table")
+        self.event_table.setAccessibleName("事件列表")
+        self.event_table.setMinimumHeight(70)
+        self.event_table.setColumnCount(7)
+        self.event_table.setHorizontalHeaderLabels(
+            ("所属状态", "名称", "显示名", "作用域", "引用", "物理来源", "权限")
+        )
+        self.event_table.setSelectionBehavior(
+            QtWidgets.QAbstractItemView.SelectRows
+        )
+        self.event_table.setSelectionMode(
+            QtWidgets.QAbstractItemView.SingleSelection
+        )
+        self.event_table.setEditTriggers(
+            QtWidgets.QAbstractItemView.NoEditTriggers
+        )
+        event_header = self.event_table.horizontalHeader()
+        for column in (0, 1, 3, 4, 6):
+            event_header.setSectionResizeMode(
+                column, QtWidgets.QHeaderView.ResizeToContents
+            )
+        for column in (2, 5):
+            event_header.setSectionResizeMode(column, QtWidgets.QHeaderView.Stretch)
+        event_layout.addWidget(self.event_table)
+        self.event_reference_table = QtWidgets.QTableWidget(self.event_group)
+        self.event_reference_table.setObjectName("event_reference_table")
+        self.event_reference_table.setAccessibleName("事件迁移引用")
+        self.event_reference_table.setMinimumHeight(70)
+        self.event_reference_table.setToolTip("所选事件的迁移或 import 映射引用，双击定位源码")
+        self.event_reference_table.setColumnCount(4)
+        self.event_reference_table.setHorizontalHeaderLabels(
+            ("类型", "声明", "位置", "物理来源")
+        )
+        self.event_reference_table.setSelectionBehavior(
+            QtWidgets.QAbstractItemView.SelectRows
+        )
+        self.event_reference_table.setSelectionMode(
+            QtWidgets.QAbstractItemView.SingleSelection
+        )
+        self.event_reference_table.setEditTriggers(
+            QtWidgets.QAbstractItemView.NoEditTriggers
+        )
+        self.event_reference_table.horizontalHeader().setSectionResizeMode(
+            1, QtWidgets.QHeaderView.Stretch
+        )
+        event_layout.addWidget(self.event_reference_table)
+        event_commands = QtWidgets.QHBoxLayout()
+        self.event_add_button = QtWidgets.QPushButton("新增", self.event_group)
+        self.event_edit_button = QtWidgets.QPushButton("编辑", self.event_group)
+        self.event_delete_button = QtWidgets.QPushButton("删除", self.event_group)
+        self.event_open_source_button = QtWidgets.QPushButton(
+            "打开来源", self.event_group
+        )
+        for button, name, tooltip in (
+            (self.event_add_button, "event_add_button", "新增当前状态的事件"),
+            (self.event_edit_button, "event_edit_button", "编辑所选事件"),
+            (self.event_delete_button, "event_delete_button", "删除所选事件声明"),
+            (
+                self.event_open_source_button,
+                "event_open_source_button",
+                "在源码工作区定位事件声明",
+            ),
+        ):
+            button.setObjectName(name)
+            button.setToolTip(tooltip)
+            button.setAccessibleName(button.text())
+            event_commands.addWidget(button)
+        event_commands.addStretch(1)
+        event_layout.addLayout(event_commands)
+        self.verticalLayout_3.insertWidget(1, self.event_group)
+        self._event_projections = ()
+        self.event_add_button.clicked.connect(self._add_event)
+        self.event_edit_button.clicked.connect(self._edit_event)
+        self.event_delete_button.clicked.connect(self._delete_event)
+        self.event_open_source_button.clicked.connect(self._open_event_source)
+        self.action_open_event_source = QtWidgets.QAction("打开事件来源", self)
+        self.action_open_event_source.setObjectName("action_open_event_source")
+        self.action_open_event_source.setShortcut("Ctrl+Return")
+        self.action_open_event_source.setShortcutContext(Qt.WidgetWithChildrenShortcut)
+        self.event_group.addAction(self.action_open_event_source)
+        self.action_open_event_source.triggered.connect(self._open_event_source)
+        self.event_table.itemSelectionChanged.connect(
+            self._update_event_actions
+        )
+        self.event_table.itemDoubleClicked.connect(
+            lambda item: self._edit_event()
+        )
+        self.event_reference_table.itemDoubleClicked.connect(
+            self._open_event_reference_source
+        )
+        self._update_event_actions()
+
+    def _init_keyboard_navigation(self):
+        order = (
+            self.tree_all_state,
+            self.button_add_state,
+            self.button_fold_all_state,
+            self.button_expand_all_state,
+            self.event_table,
+            self.event_add_button,
+            self.event_edit_button,
+            self.event_delete_button,
+            self.event_open_source_button,
+            self.button_lifecycle,
+            self.button_transition,
+            self.edit_var_def,
+            self.table_lifecycle,
+            self.table_transition,
+            self.source_editor,
+            self.task_result_dock.status_filter,
+            self.task_result_dock.search_edit,
+            self.task_result_dock.table,
+        )
+        for current, following in zip(order, order[1:]):
+            self.setTabOrder(current, following)
+
+    def _finalize_button_accessibility(self):
+        internal_names = {
+            "qt_dockwidget_floatbutton": "浮动面板",
+            "qt_dockwidget_closebutton": "关闭面板",
+        }
+        for button in self.findChildren(QtWidgets.QAbstractButton):
+            if button.icon().isNull():
+                continue
+            fallback = (
+                button.text()
+                or button.toolTip()
+                or internal_names.get(button.objectName())
+                or button.objectName()
+                or "图标按钮"
+            )
+            if not button.accessibleName():
+                button.setAccessibleName(fallback)
+            if not button.toolTip():
+                button.setToolTip(button.accessibleName())
+
+    def _focus_find_target(self):
+        self.workspace_tabs.setCurrentWidget(self.source_workspace)
+        self.source_editor.setFocus(Qt.ShortcutFocusReason)
+
+    def _cancel_active_task(self):
+        record = self.task_result_dock.selected_record
+        active = {
+            HistoryTaskStatus.QUEUED,
+            HistoryTaskStatus.RUNNING,
+            HistoryTaskStatus.CANCEL_REQUESTED,
+        }
+        if record is None or record.status not in active:
+            record = next(
+                (
+                    item
+                    for item in reversed(self.task_center.records)
+                    if item.status in active
+                ),
+                None,
+            )
+        return bool(record and self._cancel_task_record(record.task_id))
 
     def _init_import_state_chart(self):
         self._init_button_initial_import_state_machine()
@@ -201,16 +566,21 @@ class AppMainWindow(QMainWindow, UIMainWindow):
 
     def _new_state_machine(self):
         self.state_manager = StateManager()
+        self.model_explorer_dock.show()
+        self.property_inspector_dock.show()
         if self.at_page_initial:
             self.stackedWidget_state_machine.setCurrentIndex(1)
             self.at_page_initial = False
 
     def _init_tree_style(self):
         self.tree_all_state.header().hide()
-        self.tree_all_state.setTextElideMode(Qt.ElideNone)
+        self.tree_all_state.setTextElideMode(Qt.ElideMiddle)
         self.tree_all_state.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         #self.tree_all_state.setHorizontalScrollMode(QtWidgets.QAbstractItemView.ScrollPerPixel)
-        self.tree_all_state.header().setMinimumSectionSize(800)
+        self.tree_all_state.header().setMinimumSectionSize(80)
+        self.tree_all_state.header().setSectionResizeMode(
+            QtWidgets.QHeaderView.ResizeToContents
+        )
         self.tree_all_state.setAutoScroll(False)
 
     def _init_button_style(self):
@@ -773,7 +1143,37 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self, file_path, encoding=None, encoding_hints=(), operation=None
     ):
         service = self.document_service
+        new_operation = operation is None
         operation = operation or DocumentLoadOperation(parent=self)
+        if new_operation:
+            record = TaskRecord(
+                task_id=operation.operation_id,
+                kind="document-load",
+                session_id="",
+                source_revision=0,
+                dependency_fingerprints={},
+                created_at=time.time(),
+                status=HistoryTaskStatus.QUEUED,
+                summary="等待加载 {}".format(file_path),
+                messages=(),
+                artifacts=(),
+                retry_descriptor={
+                    "kind": "document-load",
+                    "path": str(file_path),
+                    "encoding": encoding,
+                    "encoding_hints": list(encoding_hints),
+                },
+                exception_chain=(),
+                boundary=TaskBoundary.EXPLICIT,
+            )
+            self.task_center.add(record)
+            self.task_center.transition(
+                operation.operation_id,
+                HistoryTaskStatus.RUNNING,
+                summary="正在加载 {}".format(file_path),
+            )
+            self._logical_load_operations[operation.operation_id] = operation
+            self._refresh_task_result_dock(show=True)
 
         def load_document(token):
             token.raise_if_cancelled()
@@ -785,12 +1185,33 @@ class AppMainWindow(QMainWindow, UIMainWindow):
             token.raise_if_cancelled()
             return session
 
-        handle = self.task_runner.submit(
-            "document-load",
-            0,
-            load_document,
-            channel="document-load",
-        )
+        try:
+            handle = self.task_runner.submit(
+                "document-load",
+                0,
+                load_document,
+                channel="document-load",
+            )
+        except BaseException as error:
+            result = TaskResult(
+                stamp=TaskStamp(
+                    task_id=uuid.uuid4().hex,
+                    channel="document-load",
+                    session_id="",
+                    source_revision=0,
+                    request_generation=0,
+                ),
+                status=TaskStatus.FAILED,
+                error=error,
+            )
+            outcome = DocumentLoadOutcome(
+                operation_id=operation.operation_id,
+                task_result=result,
+            )
+            operation.finish(outcome)
+            self.document_load_finished.emit(outcome)
+            self._complete_load_task(outcome, file_path)
+            return operation
         operation.current_attempt = handle
         self._document_load_requests[handle.stamp.task_id] = (
             operation,
@@ -896,6 +1317,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
                         QtWidgets.QMessageBox.Ok,
                     )
                     return
+                self.command_stack.reset_document(session)
                 self._set_active_document_session(session)
                 detail = "\n".join(str(item) for item in session.current_diagnostics)
                 QtWidgets.QMessageBox.critical(
@@ -912,6 +1334,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
                 extract_variable_definitions(session.source_text),
                 source_index=snapshot.source_index,
             )
+            self.command_stack.reset_document(session)
             self._set_active_document_session(session, manager=manager)
         except DocumentDependencyStaleError as error:
             ui_error = error
@@ -939,6 +1362,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
                 )
                 operation.finish(outcome)
                 self.document_load_finished.emit(outcome)
+                self._complete_load_task(outcome, file_path)
 
     def _set_active_document_session(self, session, manager=None):
         if manager is None and session.current_valid_snapshot is not None:
@@ -952,22 +1376,31 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         previous_session = self.document_session
         previous_manager = getattr(self, "state_manager", None)
         previous_source_text = self.source_editor.toPlainText()
-        previous_dock_visible = self.source_dock.isVisible()
+        previous_workspace_index = self.workspace_tabs.currentIndex()
         previous_page = self.stackedWidget_state_machine.currentIndex()
         previous_at_initial = self.at_page_initial
+        previous_selected_state_path = self._selected_state_path()
+        preserve_selected_state_path = (
+            previous_selected_state_path
+            if previous_session is not None
+            and previous_session.session_id == session.session_id
+            else None
+        )
         try:
-            self._setting_source_text = True
-            try:
-                self.source_editor.setPlainText(session.source_text)
-            finally:
-                self._setting_source_text = False
-            self.source_dock.show()
+            if self.source_editor.toPlainText() != session.source_text:
+                self._setting_source_text = True
+                try:
+                    self.source_editor.setPlainText(session.source_text)
+                finally:
+                    self._setting_source_text = False
             self._setting_projection = True
             try:
                 if manager is None:
                     self._clear_model_projection()
+                    self.workspace_tabs.setCurrentWidget(self.source_workspace)
                 else:
                     update_ui_from_state_manager(self, manager)
+                    self.workspace_tabs.setCurrentWidget(self.model_workspace)
             finally:
                 self._setting_projection = False
         except BaseException:
@@ -988,12 +1421,16 @@ class AppMainWindow(QMainWindow, UIMainWindow):
                 self._setting_projection = False
                 self.at_page_initial = previous_at_initial
                 self.stackedWidget_state_machine.setCurrentIndex(previous_page)
-                self.source_dock.setVisible(previous_dock_visible)
+                self.workspace_tabs.setCurrentIndex(previous_workspace_index)
                 self._update_document_actions()
+            self._restore_state_tree_selection(previous_selected_state_path)
             raise
 
         self.document_session = session
         self.state_manager = manager
+        self._restore_state_tree_selection(preserve_selected_state_path)
+        self.model_explorer_dock.show()
+        self.property_inspector_dock.show()
         self._record_recent_file(session.path)
         self._update_document_actions()
 
@@ -1024,6 +1461,20 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self.action_save_state_machine.setEnabled(session is not None)
         self.action_graph_gen.setEnabled(current_valid)
         self.action_code_gen.setEnabled(current_valid)
+        self.action_undo.setEnabled(
+            session is not None
+            and (
+                self.command_stack.can_undo
+                or self.source_editor.document().isUndoAvailable()
+            )
+        )
+        self.action_redo.setEnabled(
+            session is not None
+            and (
+                self.command_stack.can_redo
+                or self.source_editor.document().isRedoAvailable()
+            )
+        )
         self.edit_var_def.setReadOnly(session is not None and not current_valid)
         self.button_add_state.setEnabled(session is None or current_valid)
         self.button_lifecycle.setEnabled(session is None or current_valid)
@@ -1031,6 +1482,44 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self.setWindowModified(bool(session and session.dirty))
         if session is not None:
             self.setWindowFilePath(session.path)
+            self._document_display_name = os.path.basename(session.path)
+            if self.task_result_dock.show_full_paths_action.isChecked():
+                document_tooltip = session.path
+            else:
+                document_tooltip = self.task_center.redactor.redact_text(
+                    session.path
+                )
+            self.document_name_label.setToolTip(document_tooltip)
+            self._update_document_name_label()
+            self.document_dirty_label.setText(
+                "未保存" if session.dirty else "已保存"
+            )
+            self.document_revision_label.setText(
+                "revision {}".format(session.source_revision)
+            )
+            self.document_validation_label.setText(
+                session.validation_state.value
+            )
+            snapshot = session.current_valid_snapshot
+            dependency_count = (
+                len(snapshot.dependency_manifest) if snapshot is not None else 0
+            )
+            self.document_dependency_label.setText(
+                "依赖 {}".format(dependency_count)
+            )
+
+    def _update_document_name_label(self):
+        width = max(40, self.document_name_label.width() - 4)
+        self.document_name_label.setText(
+            self.document_name_label.fontMetrics().elidedText(
+                self._document_display_name, Qt.ElideMiddle, width
+            )
+        )
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "document_name_label"):
+            self._update_document_name_label()
 
     def _on_source_text_changed(self):
         if self._setting_source_text or self.document_session is None:
@@ -1041,6 +1530,10 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         )
         if pending is self.document_session:
             return
+        self.command_stack.clear()
+        self.task_runner.supersede(
+            "model-check", self.document_session.session_id
+        )
         self.document_session = pending
         self._clear_model_projection()
         self._update_document_actions()
@@ -1065,11 +1558,35 @@ class AppMainWindow(QMainWindow, UIMainWindow):
             channel="document-validate",
             dependency_fingerprint=dependency_fingerprint,
         )
+        self.task_center.add(
+            TaskRecord(
+                task_id=handle.stamp.task_id,
+                kind="document-validate",
+                session_id=handle.stamp.session_id,
+                source_revision=handle.stamp.source_revision,
+                dependency_fingerprints={},
+                created_at=time.time(),
+                status=HistoryTaskStatus.RUNNING,
+                summary="正在校验源码",
+                messages=(),
+                artifacts=(),
+                retry_descriptor=None,
+                exception_chain=(),
+                boundary=TaskBoundary.TRANSIENT,
+                started_at=time.time(),
+            )
+        )
+        self._refresh_task_result_dock()
         handle.finished.connect(self._finish_document_validation)
 
     @QtCore.pyqtSlot(object)
     def _finish_document_validation(self, result):
         try:
+            try:
+                self.task_center.apply_result(result)
+            except KeyError:
+                pass
+            self._refresh_task_result_dock()
             current = self.document_session
             if result.status is not TaskStatus.SUCCESS or current is None:
                 return
@@ -1111,6 +1628,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
             )
             return False
         self.document_session = saved
+        self.command_stack.mark_saved(saved)
         self._update_document_actions()
         return True
 
@@ -1213,16 +1731,50 @@ class AppMainWindow(QMainWindow, UIMainWindow):
                 snapshot = self._require_current_snapshot_for_action("模型检查")
                 if snapshot is None:
                     return
-                warning_count = sum(
-                    1
-                    for item in self.document_session.current_diagnostics
-                    if str(getattr(item, "severity", "")).lower() == "warning"
+                session = self.document_session
+                service = self.document_service
+
+                def inspect_document(token):
+                    token.raise_if_cancelled()
+                    current = service.require_current_valid_snapshot(session)
+                    report = current.inspect_report
+                    token.raise_if_cancelled()
+                    service.require_current_valid_snapshot(session)
+                    token.raise_if_cancelled()
+                    return report
+
+                handle = self.task_runner.submit(
+                    "model-check",
+                    session.source_revision,
+                    inspect_document,
+                    session_id=session.session_id,
+                    channel="model-check",
+                    dependency_fingerprint=snapshot.dependency_fingerprint,
                 )
-                message = "状态机检查通过！"
-                if warning_count:
-                    message += "\n{} 条警告。".format(warning_count)
-                QtWidgets.QMessageBox.information(self, "检查结果", message)
-                return snapshot.inspect_report
+                self._task_handles[handle.stamp.task_id] = handle
+                self.task_center.add(
+                    TaskRecord(
+                        task_id=handle.stamp.task_id,
+                        kind="model-check",
+                        session_id=session.session_id,
+                        source_revision=session.source_revision,
+                        dependency_fingerprints=dict(
+                            snapshot.dependency_manifest
+                        ),
+                        created_at=time.time(),
+                        started_at=time.time(),
+                        status=HistoryTaskStatus.RUNNING,
+                        summary="正在检查当前模型",
+                        messages=(),
+                        artifacts=(),
+                        retry_descriptor={"kind": "model-check"},
+                        exception_chain=(),
+                        boundary=TaskBoundary.EXPLICIT,
+                    )
+                )
+                handle.finished.connect(self._finish_model_check)
+                self._refresh_task_result_dock(show=True)
+                return handle
             # 获取当前的DSL代码
             dsl_content = state_manager_to_dsl(self.state_manager)
             
@@ -1251,6 +1803,59 @@ class AppMainWindow(QMainWindow, UIMainWindow):
                 error_lines=error_lines
             )
             dialog.exec_()
+
+    @QtCore.pyqtSlot(object)
+    def _finish_model_check(self, result):
+        if (
+            result.status is TaskStatus.SUCCESS
+            and not self._task_stamp_current(result.stamp)
+        ):
+            result = replace(result, status=TaskStatus.STALE, value=None)
+            handle = self._task_handles.get(result.stamp.task_id)
+            if handle is not None:
+                handle.result = result
+        status = {
+            TaskStatus.SUCCESS: HistoryTaskStatus.SUCCESS,
+            TaskStatus.FAILED: HistoryTaskStatus.FAILED,
+            TaskStatus.CANCELLED: HistoryTaskStatus.CANCELLED,
+            TaskStatus.STALE: HistoryTaskStatus.STALE,
+        }[result.status]
+        current = self.document_session
+        messages = ()
+        if (
+            status is HistoryTaskStatus.SUCCESS
+            and current is not None
+            and self._task_stamp_current(result.stamp)
+        ):
+            messages = tuple(
+                {
+                    "severity": getattr(item, "severity", "info"),
+                    "message": str(item),
+                }
+                for item in current.current_diagnostics
+            )
+        summary = {
+            HistoryTaskStatus.SUCCESS: "模型检查完成",
+            HistoryTaskStatus.CANCELLED: "模型检查已取消",
+            HistoryTaskStatus.STALE: "模型检查结果已过期",
+        }.get(status, "模型检查失败：{}".format(result.error))
+        try:
+            self.task_center.complete_persistent(
+                result.stamp.task_id,
+                status,
+                summary=summary,
+                messages=messages,
+                exception=result.error,
+            )
+        except OSError as error:
+            self.statusbar.showMessage(
+                "任务历史写入失败，原历史保持不变：{}".format(error),
+                15000,
+            )
+        finally:
+            self._task_handles.pop(result.stamp.task_id, None)
+            self._refresh_task_result_dock(show=True)
+            self.model_check_finished.emit(result)
 
     def _graph_gen(self):
         try:
@@ -1327,11 +1932,39 @@ class AppMainWindow(QMainWindow, UIMainWindow):
             )
             return None
 
+    def _task_stamp_current(self, stamp):
+        if stamp.channel not in {"model-check", "document-validate"}:
+            return True
+        session = self.document_session
+        if (
+            session is None
+            or session.session_id != stamp.session_id
+            or session.source_revision != stamp.source_revision
+        ):
+            return False
+        if stamp.channel == "document-validate":
+            snapshot = session.last_valid_snapshot
+            return bool(
+                stamp.dependency_fingerprint is None
+                or (
+                    snapshot is not None
+                    and snapshot.dependency_fingerprint
+                    == stamp.dependency_fingerprint
+                )
+            )
+        snapshot = session.current_valid_snapshot or session.last_valid_snapshot
+        return bool(
+            snapshot is not None
+            and snapshot.dependency_fingerprint == stamp.dependency_fingerprint
+        )
+
     def _on_tree_item_selection_changed(self):
         """
         当树形控件中的选择发生变化时，更新转移信息和生命周期信息表格
         """
         try:
+            if self._setting_projection:
+                return
             if self.state_manager is None:
                 return
 
@@ -1346,6 +1979,8 @@ class AppMainWindow(QMainWindow, UIMainWindow):
             self._update_transition_table(current_state.transitions)
             # 更新生命周期信息表格
             self._update_lifecycle_table(current_state.lifecycle)
+            self._update_event_table(current_state)
+            self._update_property_inspector(current_state)
             
         except Exception as e:
             QtWidgets.QMessageBox.critical(
@@ -1354,6 +1989,47 @@ class AppMainWindow(QMainWindow, UIMainWindow):
                 f"更新状态信息时发生错误：\n{str(e)}",
                 QtWidgets.QMessageBox.Ok
             )
+
+    def _selected_state_path(self):
+        item = self.tree_all_state.currentItem()
+        if item is None:
+            return None
+        state = item.data(0, Qt.UserRole)
+        get_full_path = getattr(state, "get_full_path", None)
+        if not callable(get_full_path):
+            return None
+        return get_full_path()
+
+    def _restore_state_tree_selection(self, full_path):
+        matching_item = None
+        if full_path:
+            pending = [
+                self.tree_all_state.topLevelItem(index)
+                for index in range(self.tree_all_state.topLevelItemCount())
+            ]
+            while pending:
+                item = pending.pop()
+                state = item.data(0, Qt.UserRole)
+                get_full_path = getattr(state, "get_full_path", None)
+                if callable(get_full_path) and get_full_path() == full_path:
+                    matching_item = item
+                    break
+                pending.extend(
+                    item.child(index) for index in range(item.childCount())
+                )
+
+        if matching_item is None and self.tree_all_state.topLevelItemCount():
+            matching_item = self.tree_all_state.topLevelItem(0)
+
+        signals_were_blocked = self.tree_all_state.blockSignals(True)
+        try:
+            self.tree_all_state.setCurrentItem(matching_item)
+            if matching_item is not None:
+                self.tree_all_state.scrollToItem(matching_item)
+        finally:
+            self.tree_all_state.blockSignals(signals_were_blocked)
+        self._on_tree_item_selection_changed()
+        return matching_item is not None
 
     def _clear_tables(self):
         """
@@ -1366,6 +2042,346 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         # 清空生命周期表格
         if hasattr(self, 'table_lifecycle'):
             self.table_lifecycle.setRowCount(0)
+        if hasattr(self, "event_table"):
+            self._event_projections = ()
+            self.event_table.setRowCount(0)
+            self._update_event_actions()
+        if hasattr(self, "property_path_label"):
+            self.property_path_label.setText("未选择模型对象")
+            self.property_source_label.clear()
+
+    def _update_property_inspector(self, state):
+        self.property_path_label.setText("状态：{}".format(state.get_full_path()))
+        source_ref = getattr(state, "source_ref", None)
+        if source_ref is None:
+            self.property_source_label.setText("来源：当前内存模型")
+            return
+        ownership = "可编辑" if source_ref.editable else "只读"
+        self.property_source_label.setText(
+            "来源：{}\n所有权：{}".format(
+                self.task_center.redactor.redact_text(source_ref.source_uri),
+                ownership,
+            )
+        )
+
+    @property
+    def _selected_event(self):
+        row = self.event_table.currentRow()
+        if row < 0 or row >= len(self._event_projections):
+            return None
+        return self._event_projections[row]
+
+    def _update_event_table(self, state):
+        selected_id = getattr(self._selected_event, "projection_id", None)
+        if self.document_session is None or state is None:
+            self._event_projections = ()
+        else:
+            try:
+                owner_path = tuple(state.get_full_path().split("."))
+                self._event_projections = self.event_service.list_events(
+                    self.document_session, owner_path
+                )
+            except EventProjectionError:
+                self._event_projections = ()
+        self.event_table.setRowCount(len(self._event_projections))
+        selected_row = -1
+        for row, event in enumerate(self._event_projections):
+            values = (
+                ".".join(event.owner_path),
+                event.name,
+                event.display_name or "",
+                event.scope,
+                str(len(event.use_refs)),
+                self.task_center.redactor.redact_text(event.source_uri),
+                "可编辑" if event.editable else "只读",
+            )
+            for column, value in enumerate(values):
+                item = QtWidgets.QTableWidgetItem(value)
+                item.setToolTip(value)
+                item.setData(Qt.UserRole, event.projection_id)
+                self.event_table.setItem(row, column, item)
+            if event.projection_id == selected_id:
+                selected_row = row
+        if selected_row < 0 and self._event_projections:
+            selected_row = 0
+        if selected_row >= 0:
+            self.event_table.setCurrentCell(selected_row, 0)
+            self.event_table.selectRow(selected_row)
+        self._update_event_actions()
+
+    def _event_owner_editable(self):
+        state = self._get_pro_state()
+        source_ref = getattr(state, "source_ref", None) if state else None
+        return bool(
+            self.document_session is not None
+            and self.document_session.current_valid_snapshot is not None
+            and source_ref is not None
+            and source_ref.editable
+        )
+
+    def _update_event_actions(self):
+        event = self._selected_event
+        self._update_event_references(event)
+        self.event_add_button.setEnabled(self._event_owner_editable())
+        self.event_edit_button.setEnabled(bool(event and event.editable))
+        self.event_delete_button.setEnabled(bool(event and event.editable))
+        self.event_open_source_button.setEnabled(event is not None)
+
+    def _update_event_references(self, event):
+        references = () if event is None else event.use_refs
+        self.event_reference_table.setRowCount(len(references))
+        if self.document_session is None:
+            return
+        index = self.document_session.require_current_valid_snapshot().source_index
+        for row, source_ref in enumerate(references):
+            declaration_ref = self.event_service.source_ref_for_declaration(
+                index, source_ref.declaration_ref
+            )
+            declaration = index.text_for_ref(declaration_ref).strip()
+            location = "{}:{}".format(
+                source_ref.span.start_line, source_ref.span.start_column
+            )
+            values = (
+                "import 映射"
+                if source_ref.kind in {"import_event_source", "import_event_target"}
+                else "迁移",
+                declaration,
+                location,
+                self.task_center.redactor.redact_text(source_ref.source_uri),
+            )
+            for column, value in enumerate(values):
+                item = QtWidgets.QTableWidgetItem(value)
+                item.setToolTip(value)
+                item.setData(Qt.UserRole, declaration_ref)
+                self.event_reference_table.setItem(row, column, item)
+
+    def _open_event_reference_source(self, item=None):
+        if item is None:
+            item = self.event_reference_table.currentItem()
+        source_ref = item.data(Qt.UserRole) if item is not None else None
+        return self._open_source_ref(source_ref)
+
+    def _prompt_event(self, title, name="", display_name=""):
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle(title)
+        dialog.setObjectName("event_editor_dialog")
+        layout = QtWidgets.QFormLayout(dialog)
+        name_edit = QtWidgets.QLineEdit(name, dialog)
+        name_edit.setObjectName("event_name_edit")
+        display_edit = QtWidgets.QLineEdit(display_name or "", dialog)
+        display_edit.setObjectName("event_display_name_edit")
+        layout.addRow("名称", name_edit)
+        layout.addRow("显示名", display_edit)
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel,
+            parent=dialog,
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addRow(buttons)
+        if dialog.exec_() != QtWidgets.QDialog.Accepted:
+            return None
+        return name_edit.text().strip(), display_edit.text()
+
+    def _add_event(self):
+        state = self._get_pro_state()
+        if state is None or not self._event_owner_editable():
+            return False
+        values = self._prompt_event("新增事件")
+        if values is None:
+            return False
+        try:
+            edits = self.event_service.add_edits(
+                self.document_session,
+                tuple(state.get_full_path().split(".")),
+                values[0],
+                values[1] or None,
+            )
+        except EventProjectionError as error:
+            QtWidgets.QMessageBox.warning(self, "事件未添加", str(error))
+            return False
+        return self._commit_form_edits(edits, preview_title="新增事件")
+
+    def _edit_event(self):
+        event = self._selected_event
+        if event is None:
+            return False
+        if not event.editable:
+            reply = QtWidgets.QMessageBox.question(
+                self,
+                "只读事件",
+                "该事件来自 import 或生成投影，不能在当前文件中编辑。\n"
+                "是否打开声明所在的物理源码？",
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                QtWidgets.QMessageBox.Yes,
+            )
+            if reply == QtWidgets.QMessageBox.Yes:
+                return self._open_source_ref(event.source_ref)
+            return False
+        values = self._prompt_event(
+            "编辑事件", event.name, event.display_name or ""
+        )
+        if values is None:
+            return False
+        try:
+            edits = self.event_service.edit_edits(
+                self.document_session,
+                event,
+                values[0],
+                values[1] or None,
+            )
+        except (EventReadOnlyError, EventConflictError) as error:
+            self._offer_event_conflict_source("事件未修改", error)
+            return False
+        except EventProjectionError as error:
+            QtWidgets.QMessageBox.warning(self, "事件未修改", str(error))
+            return False
+        if not edits:
+            return True
+        return self._commit_form_edits(
+            edits,
+            preview_title="编辑事件",
+            declaration_ref=event.source_ref,
+        )
+
+    def _delete_event(self):
+        event = self._selected_event
+        if event is None:
+            return False
+        if not event.editable:
+            error = EventReadOnlyError(
+                "该事件声明来自只读的 import 来源",
+                source_ref=event.source_ref,
+            )
+            self._offer_event_conflict_source("事件未删除", error)
+            return False
+        mapping_refs = tuple(
+            ref
+            for ref in event.use_refs
+            if ref.kind in {"import_event_source", "import_event_target"}
+        )
+        if mapping_refs:
+            error = EventConflictError(
+                "事件“{}”被 import 事件映射引用，不能级联删除该 import。".format(
+                    event.name
+                ),
+                source_ref=mapping_refs[0],
+                reference_kind=mapping_refs[0].kind,
+            )
+            self._offer_event_conflict_source("事件未删除", error)
+            return False
+        delete_references = bool(event.use_refs)
+        if delete_references:
+            prompt = (
+                "事件“{}”被 {} 条迁移引用，不能只删除声明。\n"
+                "是否同时删除这些引用迁移？"
+            ).format(event.name, len(event.use_refs))
+        else:
+            prompt = "删除事件声明“{}”？".format(event.name)
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "删除事件",
+            prompt,
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        if reply != QtWidgets.QMessageBox.Yes:
+            return False
+        try:
+            edits = self.event_service.delete_edits(
+                self.document_session,
+                event,
+                delete_references=delete_references,
+            )
+        except (EventReadOnlyError, EventConflictError) as error:
+            self._offer_event_conflict_source("事件未删除", error)
+            return False
+        except EventProjectionError as error:
+            QtWidgets.QMessageBox.warning(self, "事件未删除", str(error))
+            return False
+        return self._commit_form_edits(
+            edits,
+            preview_title="删除事件",
+            declaration_ref=event.source_ref,
+        )
+
+    def _open_event_source(self):
+        event = self._selected_event
+        return self._open_source_ref(event.source_ref if event is not None else None)
+
+    def _offer_event_conflict_source(self, title, error):
+        source_ref = getattr(error, "source_ref", None)
+        if source_ref is None:
+            QtWidgets.QMessageBox.warning(self, title, str(error))
+            return False
+        reference_kind = getattr(error, "reference_kind", None)
+        reference_label = (
+            "import 事件映射"
+            if reference_kind in {"import_event_source", "import_event_target"}
+            else "只读声明或迁移引用"
+        )
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            title,
+            "{}\n\n冲突来源：{}。是否打开来源？".format(
+                error, reference_label
+            ),
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.Yes,
+        )
+        if reply != QtWidgets.QMessageBox.Yes:
+            return False
+        return self._open_source_ref(source_ref)
+
+    def _open_source_ref(self, source_ref):
+        if source_ref is None or self.document_session is None:
+            return False
+        index = self.document_session.require_current_valid_snapshot().source_index
+        document = index.document_for_ref(source_ref)
+        if source_ref.file_id == index.root_document_id:
+            editor = self.source_editor
+            self.workspace_tabs.setCurrentWidget(self.source_workspace)
+        else:
+            editor = self._imported_source_editor(document)
+        cursor = editor.textCursor()
+        cursor.setPosition(
+            document.python_to_qt_offset(source_ref.span.start_offset)
+        )
+        cursor.setPosition(
+            document.python_to_qt_offset(source_ref.span.end_offset),
+            QtGui.QTextCursor.KeepAnchor,
+        )
+        editor.setTextCursor(cursor)
+        editor.setFocus()
+        return True
+
+    def _imported_source_editor(self, document):
+        for index in range(self.workspace_tabs.count()):
+            page = self.workspace_tabs.widget(index)
+            if page.objectName() == "imported_source_workspace":
+                page.setProperty("source_uri", document.uri)
+                editor = page.findChild(QtWidgets.QPlainTextEdit)
+                editor.setPlainText(document.text)
+                self.workspace_tabs.setTabText(
+                    index, os.path.basename(document.path)
+                )
+                self.workspace_tabs.setCurrentIndex(index)
+                return editor
+        page = QtWidgets.QWidget(self.workspace_tabs)
+        page.setObjectName("imported_source_workspace")
+        page.setProperty("source_uri", document.uri)
+        layout = QtWidgets.QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        editor = QtWidgets.QPlainTextEdit(page)
+        editor.setObjectName("imported_source_editor")
+        editor.setReadOnly(True)
+        editor.setPlainText(document.text)
+        layout.addWidget(editor)
+        tab_index = self.workspace_tabs.addTab(
+            page, os.path.basename(document.path)
+        )
+        self.workspace_tabs.setCurrentIndex(tab_index)
+        return editor
 
     def _update_transition_table(self, transitions):
         """
@@ -1994,10 +3010,80 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         )
         return self._commit_form_edits((edit,))
 
-    def _commit_form_edits(self, edits):
+    def _confirm_event_transaction(
+        self, transaction, title, declaration_ref=None
+    ):
+        dialog = QtWidgets.QDialog(self)
+        dialog.setObjectName("event_transaction_preview_dialog")
+        dialog.setWindowTitle("{}预览".format(title))
+        dialog.resize(900, 560)
+        layout = QtWidgets.QVBoxLayout(dialog)
+
+        if declaration_ref is not None:
+            location = "声明位置：{}:{}  {}".format(
+                declaration_ref.span.start_line,
+                declaration_ref.span.start_column,
+                self.task_center.redactor.redact_text(
+                    declaration_ref.source_uri
+                ),
+            )
+        else:
+            location = "声明位置：将在当前状态中新增"
+        location_label = QtWidgets.QLabel(location, dialog)
+        location_label.setObjectName("event_transaction_location")
+        location_label.setTextInteractionFlags(Qt.TextSelectableByKeyboard | Qt.TextSelectableByMouse)
+        layout.addWidget(location_label)
+
+        affected = QtWidgets.QLabel(
+            "本次事务包含 {} 项源码修改；确认后将作为一个命令提交，可整体撤销。".format(
+                len(transaction.forward_edits)
+            ),
+            dialog,
+        )
+        affected.setObjectName("event_transaction_summary")
+        layout.addWidget(affected)
+
+        panes = QtWidgets.QSplitter(Qt.Horizontal, dialog)
+        for heading, text, object_name in (
+            ("修改前", transaction.before_text, "event_transaction_before"),
+            ("修改后", transaction.after_text, "event_transaction_after"),
+        ):
+            page = QtWidgets.QWidget(panes)
+            page_layout = QtWidgets.QVBoxLayout(page)
+            page_layout.setContentsMargins(0, 0, 0, 0)
+            page_layout.addWidget(QtWidgets.QLabel(heading, page))
+            editor = QtWidgets.QPlainTextEdit(page)
+            editor.setObjectName(object_name)
+            editor.setReadOnly(True)
+            editor.setLineWrapMode(QtWidgets.QPlainTextEdit.NoWrap)
+            editor.setPlainText(text)
+            page_layout.addWidget(editor)
+            panes.addWidget(page)
+        layout.addWidget(panes, 1)
+
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel,
+            parent=dialog,
+        )
+        buttons.button(QtWidgets.QDialogButtonBox.Ok).setText("确认提交")
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        return dialog.exec_() == QtWidgets.QDialog.Accepted
+
+    def _commit_form_edits(
+        self, edits, preview_title=None, declaration_ref=None
+    ):
         try:
-            updated = self.document_service.apply_edits(
+            transaction = self.document_service.preview_edits(
                 self.document_session, edits
+            )
+            if preview_title is not None and not self._confirm_event_transaction(
+                transaction, preview_title, declaration_ref
+            ):
+                return False
+            updated = self.command_stack.execute(
+                self.document_session, transaction
             )
         except DocumentValidationError as error:
             detail = "\n".join(
@@ -2012,5 +3098,165 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         except Exception as error:
             QtWidgets.QMessageBox.warning(self, "编辑未应用", str(error))
             return False
+        self.task_runner.supersede(
+            "model-check", self.document_session.session_id
+        )
         self._set_active_document_session(updated)
         return True
+
+    def _undo_document(self):
+        if self.document_session is None:
+            return False
+        if (
+            self.source_editor.hasFocus()
+            and self.source_editor.document().isUndoAvailable()
+        ):
+            self.source_editor.undo()
+            return True
+        try:
+            self._variable_edit_timer.stop()
+            restored = self.command_stack.undo(self.document_session)
+        except CommandStateError as error:
+            QtWidgets.QMessageBox.warning(self, "无法撤销", str(error))
+            return False
+        self.task_runner.invalidate(
+            "document-validate", self.document_session.session_id
+        )
+        self.task_runner.supersede(
+            "model-check", self.document_session.session_id
+        )
+        self._set_active_document_session(restored)
+        return True
+
+    def _redo_document(self):
+        if self.document_session is None:
+            return False
+        if (
+            self.source_editor.hasFocus()
+            and self.source_editor.document().isRedoAvailable()
+        ):
+            self.source_editor.redo()
+            return True
+        try:
+            self._variable_edit_timer.stop()
+            restored = self.command_stack.redo(self.document_session)
+        except CommandStateError as error:
+            QtWidgets.QMessageBox.warning(self, "无法重做", str(error))
+            return False
+        self.task_runner.invalidate(
+            "document-validate", self.document_session.session_id
+        )
+        self.task_runner.supersede(
+            "model-check", self.document_session.session_id
+        )
+        self._set_active_document_session(restored)
+        return True
+
+    def _refresh_task_result_dock(self, show=False):
+        self.task_result_dock.refresh()
+        if show and self.isVisible():
+            self.task_result_dock.show()
+
+    def _complete_load_task(self, outcome, file_path):
+        status = {
+            TaskStatus.SUCCESS: HistoryTaskStatus.SUCCESS,
+            TaskStatus.FAILED: HistoryTaskStatus.FAILED,
+            TaskStatus.CANCELLED: HistoryTaskStatus.CANCELLED,
+            TaskStatus.STALE: HistoryTaskStatus.STALE,
+        }.get(outcome.status, HistoryTaskStatus.FAILED)
+        summary = {
+            HistoryTaskStatus.SUCCESS: "已加载 {}".format(file_path),
+            HistoryTaskStatus.CANCELLED: "已取消加载 {}".format(file_path),
+            HistoryTaskStatus.STALE: "加载结果已过期 {}".format(file_path),
+        }.get(status, "加载失败 {}: {}".format(file_path, outcome.error))
+        completion = {}
+        session = outcome.value if status is HistoryTaskStatus.SUCCESS else None
+        if session is not None:
+            completion.update(
+                session_id=session.session_id,
+                source_revision=session.source_revision,
+            )
+            snapshot = session.current_valid_snapshot
+            if snapshot is not None:
+                completion["dependency_fingerprints"] = dict(
+                    snapshot.dependency_manifest
+                )
+            if session.current_diagnostics:
+                completion["messages"] = tuple(
+                    {
+                        "severity": getattr(item, "severity", "info"),
+                        "message": str(item),
+                    }
+                    for item in session.current_diagnostics
+                )
+        if outcome.error is not None:
+            completion["exception"] = outcome.error
+        try:
+            self.task_center.complete_persistent(
+                outcome.operation_id,
+                status,
+                summary=summary,
+                **completion
+            )
+        except (KeyError, StopIteration):
+            pass
+        except OSError as error:
+            self.statusbar.showMessage(
+                "任务历史写入失败，原历史保持不变：{}".format(error),
+                15000,
+            )
+        finally:
+            self._logical_load_operations.pop(outcome.operation_id, None)
+            self._refresh_task_result_dock(show=True)
+
+    def _cancel_task_record(self, task_id):
+        operation = self._logical_load_operations.get(task_id)
+        handle = self._task_handles.get(task_id)
+        if operation is None and handle is None:
+            return False
+        record = next(
+            (item for item in self.task_center.records if item.task_id == task_id),
+            None,
+        )
+        kind = record.kind if record is not None else (
+            "document-load" if operation is not None else "model-check"
+        )
+        summary = {
+            "document-load": "正在取消加载",
+            "model-check": "正在取消模型检查",
+        }.get(kind, "正在取消任务")
+        try:
+            self.task_center.transition(
+                task_id,
+                HistoryTaskStatus.CANCEL_REQUESTED,
+                summary=summary,
+            )
+        except ValueError:
+            return False
+        if operation is not None:
+            operation.cancel()
+        else:
+            handle.cancel()
+        self._refresh_task_result_dock(show=True)
+        return True
+
+    def _retry_task_record(self, record):
+        descriptor = record.retry_descriptor or {}
+        if descriptor.get("kind") == "model-check":
+            return self._validate_statechart()
+        if descriptor.get("kind") != "document-load":
+            return None
+        path = descriptor.get("path")
+        if not path or any(
+            marker in str(path)
+            for marker in ("<WORKSPACE>", "<HOME>", "<TEMP>")
+        ):
+            return None
+        if not self._confirm_document_replacement():
+            return None
+        hints = tuple(tuple(item) for item in descriptor.get("encoding_hints", ()))
+        return self._start_document_load(
+            path,
+            encoding=descriptor.get("encoding"),
+            encoding_hints=hints,
+        )
