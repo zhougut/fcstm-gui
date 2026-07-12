@@ -70,21 +70,25 @@ class SimulationWorkspace(QtWidgets.QWidget):
         layout.addLayout(form)
 
         controls = QtWidgets.QHBoxLayout()
+        controls.setSpacing(0)
         self.initialize_button = self._button("初始化", "simulation_initialize_button")
         self.cycle_button = self._button("单步", "simulation_cycle_button")
         self.run_button = self._button("连续运行", "simulation_run_button")
         self.pause_button = self._button("暂停", "simulation_pause_button")
         self.reset_button = self._button("重置", "simulation_reset_button")
         self.cancel_button = self._button("停止", "simulation_cancel_button")
-        for button in (
+        buttons = (
             self.initialize_button,
             self.cycle_button,
             self.run_button,
             self.pause_button,
             self.reset_button,
             self.cancel_button,
-        ):
+        )
+        for index, button in enumerate(buttons):
             controls.addWidget(button)
+            if index + 1 < len(buttons):
+                controls.addSpacing(8)
         controls.addStretch(1)
         layout.addLayout(controls)
 

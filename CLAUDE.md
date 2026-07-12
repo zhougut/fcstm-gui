@@ -220,9 +220,9 @@ always expose the same contract.
   asynchronous load signal plus the new session/path/text facts. Never replace
   this with a direct document-service or load-slot call.
 - Cocoa style can apply negative native control spacing even when adjacent
-  buttons have fixed widths. Separate graph-toolbar controls with explicit
-  fixed spacer items; shrinking buttons alone can preserve or worsen their
-  geometric overlap.
+  buttons have fixed widths. Separate graph and simulation toolbar controls
+  with explicit fixed spacer items; shrinking buttons alone can preserve or
+  worsen their geometric overlap.
 - After a native dialog closes on macOS, `activateWindow()` is asynchronous.
   Keyboard acceptance must raise the product window and wait for actual active
   window plus focus state before sending the standard `Cmd` shortcut, then wait

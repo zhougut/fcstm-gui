@@ -61,3 +61,29 @@ def test_initialize_cycle_and_reset_are_not_pausable(qtbot):
 
     assert not panel.pause_button.isEnabled()
     assert panel.cancel_button.isEnabled()
+
+
+def test_simulation_controls_do_not_overlap(qtbot):
+    panel = SimulationWorkspace()
+    qtbot.addWidget(panel)
+    panel.resize(1280, 720)
+    panel.show()
+    qtbot.wait(10)
+
+    controls = (
+        panel.initialize_button,
+        panel.cycle_button,
+        panel.run_button,
+        panel.pause_button,
+        panel.reset_button,
+        panel.cancel_button,
+    )
+    for left, right in zip(controls, controls[1:]):
+        intersection = left.geometry().intersected(right.geometry())
+        assert intersection.width() <= 1 or intersection.height() <= 1, (
+            left.objectName(),
+            left.geometry(),
+            right.objectName(),
+            right.geometry(),
+            intersection,
+        )
