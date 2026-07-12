@@ -337,7 +337,10 @@ def _check_pyfcstm_plantuml_cli():
 
 
 def _check_visualize(format_name):
-    from app.application.graph_render import GraphRenderService
+    from app.application.graph_render import (
+        GraphRenderService,
+        _reject_unexpected_stderr,
+    )
     from pyfcstm.model import load_state_machine_from_text
     previous_dot = os.environ.get('GRAPHVIZ_DOT')
     os.environ['GRAPHVIZ_DOT'] = os.path.join(
@@ -355,10 +358,11 @@ def _check_visualize(format_name):
             )
             if result.engine != 'smetana' or not result.output_sha256:
                 raise RuntimeError(format_name + ' visualization omitted Smetana provenance')
-            if result.exit_code != 0 or result.stderr:
+            if result.exit_code != 0:
                 raise RuntimeError(
                     format_name + ' renderer execution failed: ' + result.stderr
                 )
+            _reject_unexpected_stderr(result.stderr)
             if 'Smoke' not in result.semantic_labels:
                 raise RuntimeError(format_name + ' visualization omitted model semantics')
             return '{} bytes, source {}, svg {}'.format(
