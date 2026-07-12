@@ -26,6 +26,10 @@ def test_self_check_writes_versioned_report(monkeypatch, tmp_path):
     assert report["schema"] == "fcstm-gui.self-check-report"
     assert report["version"] == 1
     assert report["status"] == "passed"
+    assert report["platform"]["qt_platform"] not in {
+        "<not-created>",
+        "<unavailable>",
+    }
     assert report["counts"] == {
         "total": 2,
         "passed": 2,

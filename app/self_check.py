@@ -61,8 +61,10 @@ def _check_qt_application():
 
 def _qt_platform_name():
     try:
-        from PyQt5.QtGui import QGuiApplication
-        return str(QGuiApplication.platformName() or '<not-created>')
+        from PyQt5.QtWidgets import QApplication
+        app = QApplication.instance() or QApplication([])
+        app.processEvents()
+        return str(app.platformName() or '<not-created>')
     except BaseException:
         return '<unavailable>'
 

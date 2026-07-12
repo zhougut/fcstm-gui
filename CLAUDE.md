@@ -38,6 +38,9 @@ always expose the same contract.
 
 - `--self-check` must execute every bundled pyfcstm library and core path; an
   import or version query is not evidence that a native binding works.
+- A self-check report must create or retain a QApplication when recording the
+  Qt platform. Capturing it after temporary GUI checks are garbage-collected
+  can produce `<not-created>` despite successful native execution.
 - Exercise cross-platform-sensitive dependencies through real logic: parsing,
   model loading, rendering, filesystem paths, subprocesses, native libraries,
   and solver calls where applicable.
