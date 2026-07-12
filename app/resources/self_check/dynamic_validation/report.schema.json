@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "fcstm-gui.dynamic-validation-report.v1",
+  "type": "object",
+  "required": ["schema", "version", "status"],
+  "properties": {
+    "schema": {
+      "enum": [
+        "fcstm-gui.dynamic-validation-report.step",
+        "fcstm-gui.dynamic-validation-report.case",
+        "fcstm-gui.dynamic-validation-report.suite",
+        "fcstm-gui.dynamic-validation-report.provenance"
+      ]
+    },
+    "version": {"const": 1},
+    "status": {"type": "string"},
+    "source_revision": {"type": ["integer", "null"], "minimum": 0},
+    "dependency_fingerprint": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "scenario_sha256": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  },
+  "additionalProperties": true
+}

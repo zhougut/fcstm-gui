@@ -1,0 +1,13 @@
+{
+  "schema": "fcstm-gui.dynamic-validation-scenario",
+  "version": 1,
+  "case_id": "pseudo_self_loop_step_limit_raises_dfs_error",
+  "upstream_case_id": "pseudo_self_loop_step_limit_raises_dfs_error",
+  "upstream_commit": "f142a656df43e0b80ed6b7ac63b0696345325646",
+  "model_file": "pseudo_self_loop_step_limit_raises_dfs_error.fcstm",
+  "initial": {"state": null, "variables": {}},
+  "steps": [
+    {"events": [], "commands": [], "expected": {"state": "Root.A", "variables": {"x": 1, "spin": 0}, "ended": false}},
+    {"events": ["Root.A.Go"], "commands": [], "expected": {"state": "Root.A", "variables": {"x": 1, "spin": 0}, "ended": false, "exception": {"type": "SimulationRuntimeDfsError", "message_contains": "step safety limit", "cause_type": null, "cause_contains": null}, "rollback": true}}
+  ]
+}

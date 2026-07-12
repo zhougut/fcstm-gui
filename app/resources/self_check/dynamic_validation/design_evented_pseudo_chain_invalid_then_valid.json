@@ -1,0 +1,14 @@
+{
+  "schema": "fcstm-gui.dynamic-validation-scenario",
+  "version": 1,
+  "case_id": "design_evented_pseudo_chain_invalid_then_valid",
+  "upstream_case_id": "design_evented_pseudo_chain_invalid_then_valid",
+  "upstream_commit": "f142a656df43e0b80ed6b7ac63b0696345325646",
+  "model_file": "design_evented_pseudo_chain_invalid_then_valid.fcstm",
+  "initial": {"state": null, "variables": {}},
+  "steps": [
+    {"events": [], "commands": [], "expected": {"state": "Root.A", "variables": {"counter": 1}, "ended": false}},
+    {"events": ["Root.A.GoB"], "commands": [], "expected": {"state": "Root.A", "variables": {"counter": 2}, "ended": false}},
+    {"events": ["Root.A.GoB", "Root.B.P1.Event"], "commands": [], "expected": {"state": "Root.B.B1", "variables": {"counter": 112}, "ended": false}}
+  ]
+}

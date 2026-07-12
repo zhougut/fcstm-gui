@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "fcstm-gui.dynamic-validation-scenario.v1",
+  "type": "object",
+  "required": ["schema", "version", "case_id", "model_file", "initial", "steps"],
+  "properties": {
+    "schema": {"const": "fcstm-gui.dynamic-validation-scenario"},
+    "version": {"const": 1},
+    "case_id": {"type": "string", "minLength": 1},
+    "upstream_case_id": {"type": ["string", "null"]},
+    "upstream_commit": {"type": ["string", "null"]},
+    "model_file": {"type": "string", "pattern": "^[^/\\\\]+\\.fcstm$"},
+    "initial": {
+      "type": "object",
+      "required": ["state", "variables"],
+      "properties": {
+        "state": {"type": ["string", "null"]},
+        "variables": {"type": "object"}
+      },
+      "additionalProperties": false
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["events", "commands", "expected"],
+        "properties": {
+          "events": {"type": "array", "items": {"type": "string"}},
+          "commands": {"type": "array", "items": {"enum": ["reset"]}},
+          "expected": {"type": "object"}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

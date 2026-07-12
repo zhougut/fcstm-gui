@@ -1,0 +1,13 @@
+{
+  "schema": "fcstm-gui.dynamic-validation-scenario",
+  "version": 1,
+  "case_id": "expression_failure_transition_guard_raises_expression_error",
+  "upstream_case_id": "expression_failure_transition_guard_raises_expression_error",
+  "upstream_commit": "f142a656df43e0b80ed6b7ac63b0696345325646",
+  "model_file": "expression_failure_transition_guard_raises_expression_error.fcstm",
+  "initial": {"state": null, "variables": {}},
+  "steps": [
+    {"events": [], "commands": [], "expected": {"state": "Root.A", "variables": {"counter": 0, "divisor": 0}, "ended": false}},
+    {"events": [], "commands": [], "expected": {"state": "Root.A", "variables": {"counter": 0, "divisor": 0}, "ended": false, "exception": {"type": "SimulationRuntimeExpressionError", "message_contains": "transition guard evaluation failed: division by zero", "cause_type": "ZeroDivisionError", "cause_contains": "division by zero"}, "rollback": true}}
+  ]
+}

@@ -5,7 +5,13 @@ import shutil
 from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_submodules
 
 mode = os.environ.get('FCSTM_GUI_BUILD_MODE', 'onedir').lower()
-datas = [('docs/plantuml.jar', 'docs')] + collect_data_files('qtawesome') + collect_data_files('pyfcstm')
+datas = [
+    ('docs/plantuml.jar', 'docs'),
+    (
+        'app/resources/self_check/dynamic_validation',
+        'app/resources/self_check/dynamic_validation',
+    ),
+] + collect_data_files('qtawesome') + collect_data_files('pyfcstm')
 if sys.platform == 'win32':
     z3_suffixes = ('.dll',)
 elif sys.platform == 'darwin':

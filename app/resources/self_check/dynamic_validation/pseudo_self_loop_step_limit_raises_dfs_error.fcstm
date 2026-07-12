@@ -1,0 +1,14 @@
+def int x = 0;
+def int spin = 0;
+
+state Root {
+    state A {
+        during { x = x + 1; }
+    }
+    pseudo state P {
+        during { spin = spin + 1; }
+    }
+    [*] -> A;
+    A -> P :: Go effect { x = x + 100; };
+    P -> P;
+}

@@ -88,6 +88,18 @@ always expose the same contract.
 - Treat artifact-service timeouts as infrastructure failures only after the log
   proves tests and local packaging passed. Re-run and still inspect the complete
   replacement matrix rather than weakening artifact upload checks.
+- Validate dynamic-validation payload type before treating it as a filesystem
+  path. A direct JSON array/scalar must become a structured scenario error, not
+  a platform-dependent `Path` `TypeError`.
+- A cancelled `TaskRunner` result may still carry cycles or steps completed
+  before the cooperative boundary. Render and persist those partial results
+  before publishing the cancelled state; cancellation must not erase evidence.
+- Versioned validation reports must carry the scenario SHA-256, model content
+  fingerprint, and source revision alongside expected/actual data. Keep these
+  provenance fields in exported reports and frozen-resource acceptance checks.
+- Do not add a schema-validation dependency only for CI. When the repository
+  does not already depend on one, keep runtime validation strict and provide a
+  standard-library frozen-artifact checker for the supported schema subset.
 
 ## Required Local Evidence
 

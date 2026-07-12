@@ -1,5 +1,6 @@
 from dataclasses import dataclass, replace
 from typing import Optional
+import json
 import os
 import time
 import uuid
@@ -34,6 +35,8 @@ from app.application.diagnostics import (
     DiagnosticService,
     DiagnosticSourceKind,
 )
+from app.application.dynamic_validation import DynamicValidationService
+from app.application.simulation import SimulationService
 from app.application.task_runner import (
     TaskResult,
     TaskRunner,
@@ -41,6 +44,7 @@ from app.application.task_runner import (
     TaskStatus,
 )
 from app.application.tasks import (
+    TaskArtifact,
     TaskBoundary,
     TaskCenter,
     TaskRecord,
@@ -69,6 +73,8 @@ from .dialog_add_lifecycle import DialogAddLifecycle
 from .dialog_add_transition import DialogAddTransition
 from .task_result_dock import TaskResultDock
 from .diagnostics_panel import DiagnosticsPanel
+from .dynamic_validation_workspace import DynamicValidationWorkspace
+from .simulation_workspace import SimulationWorkspace
 import re
 
 
@@ -118,6 +124,8 @@ class AppMainWindow(QMainWindow, UIMainWindow):
     document_load_finished = QtCore.pyqtSignal(object)
     document_validation_finished = QtCore.pyqtSignal(object)
     model_check_finished = QtCore.pyqtSignal(object)
+    simulation_task_finished = QtCore.pyqtSignal(object)
+    dynamic_validation_finished = QtCore.pyqtSignal(object)
     state_manager: Optional[StateManager]
 
     def __init__(
@@ -138,6 +146,10 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self.document_service = document_service or DocumentService()
         self.diagnostic_service = DiagnosticService()
         self.event_service = EventProjectionService(self.document_service)
+        self.simulation_service = SimulationService()
+        self.dynamic_validation_service = DynamicValidationService()
+        self._simulation_session = None
+        self._workspace_task_actions = {}
         self.document_session = None
         self.settings = settings if settings is not None else QtCore.QSettings(
             "zhougut", "fcstm-gui"
@@ -178,6 +190,8 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self._init_source_editor()
         self._init_diagnostics_panel()
         self._init_workbench_layout()
+        self._init_simulation_workspace()
+        self._init_dynamic_validation_workspace()
         self._init_event_panel()
         self._init_task_result_dock()
         self._publish_history_warnings()
@@ -383,11 +397,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         )
 
     def _init_workbench_layout(self):
-        for page in (
-            self.graph_workspace,
-            self.simulation_workspace,
-            self.dynamic_validation_workspace,
-        ):
+        for page in (self.graph_workspace,):
             self.workspace_tabs.setTabEnabled(
                 self.workspace_tabs.indexOf(page), False
             )
@@ -413,6 +423,43 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self.menu_view.addAction(self.action_toggle_property_inspector)
         self.setCorner(Qt.BottomLeftCorner, Qt.BottomDockWidgetArea)
         self.setCorner(Qt.BottomRightCorner, Qt.BottomDockWidgetArea)
+
+    def _init_simulation_workspace(self):
+        layout = self.simulation_workspace.layout()
+        if layout is None:
+            layout = QtWidgets.QVBoxLayout(self.simulation_workspace)
+            layout.setContentsMargins(0, 0, 0, 0)
+        self.simulation_panel = SimulationWorkspace(self.simulation_workspace)
+        layout.addWidget(self.simulation_panel)
+        self.simulation_panel.initialize_requested.connect(
+            self._initialize_simulation
+        )
+        self.simulation_panel.cycle_requested.connect(self._cycle_simulation)
+        self.simulation_panel.run_requested.connect(self._run_simulation)
+        self.simulation_panel.reset_requested.connect(self._reset_simulation)
+        self.simulation_panel.cancel_requested.connect(
+            lambda: self._cancel_workspace_kind("ordinary-simulation")
+        )
+
+    def _init_dynamic_validation_workspace(self):
+        provenance = self.dynamic_validation_service._load_provenance()
+        layout = self.dynamic_validation_workspace.layout()
+        if layout is None:
+            layout = QtWidgets.QVBoxLayout(self.dynamic_validation_workspace)
+            layout.setContentsMargins(0, 0, 0, 0)
+        self.dynamic_validation_panel = DynamicValidationWorkspace(
+            sorted(provenance["cases"]), self.dynamic_validation_workspace
+        )
+        layout.addWidget(self.dynamic_validation_panel)
+        self.dynamic_validation_panel.run_requested.connect(
+            self._run_dynamic_validation
+        )
+        self.dynamic_validation_panel.cancel_requested.connect(
+            lambda: self._cancel_workspace_kind("dynamic-validation")
+        )
+        self.dynamic_validation_panel.export_requested.connect(
+            self._export_dynamic_validation_report
+        )
 
     def _init_event_panel(self):
         self.event_group = QtWidgets.QGroupBox("事件", self.model_workspace)
@@ -1513,6 +1560,23 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self.workspace_tabs.setTabEnabled(
             diagnostics_index, session is not None
         )
+        snapshot = session.current_valid_snapshot if current_valid else None
+        for page in (self.simulation_workspace, self.dynamic_validation_workspace):
+            self.workspace_tabs.setTabEnabled(
+                self.workspace_tabs.indexOf(page), current_valid
+            )
+        fingerprint = snapshot.dependency_fingerprint if snapshot is not None else None
+        revision = session.source_revision if session is not None else None
+        self.simulation_panel.set_document_available(
+            current_valid, revision=revision, fingerprint=fingerprint
+        )
+        self.dynamic_validation_panel.set_document_available(current_valid)
+        if self._simulation_session is not None and not (
+            current_valid
+            and self._simulation_session.matches(revision, fingerprint)
+        ):
+            self._simulation_session = None
+            self.simulation_panel.invalidate()
         self._refresh_diagnostics_panel()
         self.setWindowModified(bool(session and session.dirty))
         if session is not None:
@@ -1786,6 +1850,12 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self.command_stack.clear()
         self.task_runner.supersede(
             "model-check", self.document_session.session_id
+        )
+        self.task_runner.supersede(
+            "ordinary-simulation", self.document_session.session_id
+        )
+        self.task_runner.supersede(
+            "dynamic-validation", self.document_session.session_id
         )
         self.document_session = pending
         self._clear_model_projection()
@@ -2186,7 +2256,12 @@ class AppMainWindow(QMainWindow, UIMainWindow):
             return None
 
     def _task_stamp_current(self, stamp):
-        if stamp.channel not in {"model-check", "document-validate"}:
+        if stamp.channel not in {
+            "model-check",
+            "document-validate",
+            "ordinary-simulation",
+            "dynamic-validation",
+        }:
             return True
         session = self.document_session
         if (
@@ -3404,6 +3479,406 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         )
         self._set_active_document_session(restored)
         return True
+
+    def _submit_workspace_task(self, kind, action, work, running_summary):
+        session = self.document_session
+        if session is None:
+            return None
+        snapshot = self._require_current_snapshot_for_action(running_summary)
+        if snapshot is None:
+            return None
+        handle = self.task_runner.submit(
+            kind,
+            session.source_revision,
+            work,
+            session_id=session.session_id,
+            channel=kind,
+            dependency_fingerprint=snapshot.dependency_fingerprint,
+        )
+        now = time.time()
+        self.task_center.add(
+            TaskRecord(
+                task_id=handle.stamp.task_id,
+                kind=kind,
+                session_id=session.session_id,
+                source_revision=session.source_revision,
+                dependency_fingerprints=dict(snapshot.dependency_manifest),
+                created_at=now,
+                started_at=now,
+                status=HistoryTaskStatus.RUNNING,
+                summary=running_summary,
+                messages=(),
+                artifacts=(),
+                retry_descriptor=None,
+                exception_chain=(),
+                boundary=TaskBoundary.EXPLICIT,
+            )
+        )
+        self._task_handles[handle.stamp.task_id] = handle
+        self._workspace_task_actions[handle.stamp.task_id] = action
+        if kind == "ordinary-simulation":
+            handle.finished.connect(self._finish_simulation_task)
+            self.simulation_panel.set_busy(True, running_summary)
+        else:
+            handle.finished.connect(self._finish_dynamic_validation_task)
+            self.dynamic_validation_panel.set_busy(True, running_summary)
+        self._refresh_task_result_dock(show=True)
+        return handle
+
+    def _initialize_simulation(self, options):
+        session = self.document_session
+        if session is None or session.current_valid_snapshot is None:
+            return None
+        snapshot = session.current_valid_snapshot
+        state = options.get("state")
+        initial_state = tuple(item for item in state.split(".") if item) if state else None
+        source_uri = Path(canonical_path(session.path)).as_uri()
+
+        def work(token):
+            token.raise_if_cancelled()
+            simulation = self.simulation_service.start(
+                session.source_text,
+                source_uri=source_uri,
+                source_revision=session.source_revision,
+                dependency_fingerprint=snapshot.dependency_fingerprint,
+                initial_state=initial_state,
+                initial_vars=options.get("variables"),
+                source_path=session.path,
+                model=snapshot.model,
+            )
+            token.raise_if_cancelled()
+            initial_cycle = None
+            if initial_state is None:
+                initial_cycle = self.simulation_service.cycle(simulation)
+            return {"session": simulation, "initial_cycle": initial_cycle}
+
+        return self._submit_workspace_task(
+            "ordinary-simulation", "initialize", work, "正在初始化普通仿真"
+        )
+
+    def _cycle_simulation(self, events):
+        simulation = self._simulation_session
+        if simulation is None:
+            return None
+
+        def work(token):
+            token.raise_if_cancelled()
+            return self.simulation_service.cycle(simulation, events=events)
+
+        return self._submit_workspace_task(
+            "ordinary-simulation", "cycle", work, "正在执行一个 simulation cycle"
+        )
+
+    def _run_simulation(self, options):
+        simulation = self._simulation_session
+        if simulation is None:
+            return None
+        max_cycles = int(options["max_cycles"])
+        events = tuple(options.get("events", ()))
+
+        def work(token):
+            return self.simulation_service.run(
+                simulation,
+                max_cycles=max_cycles,
+                events_per_cycle=tuple(events for _ in range(max_cycles)),
+                cancel_token=token,
+            )
+
+        return self._submit_workspace_task(
+            "ordinary-simulation", "run", work, "正在连续运行普通仿真"
+        )
+
+    def _reset_simulation(self):
+        simulation = self._simulation_session
+        if simulation is None:
+            return None
+
+        def work(token):
+            token.raise_if_cancelled()
+            snapshot = self.simulation_service.reset(simulation)
+            initial_cycle = None
+            if simulation.initial_state is None:
+                initial_cycle = self.simulation_service.cycle(simulation)
+                snapshot = initial_cycle.snapshot
+            return {"snapshot": snapshot, "initial_cycle": initial_cycle}
+
+        return self._submit_workspace_task(
+            "ordinary-simulation", "reset", work, "正在重置普通仿真"
+        )
+
+    @QtCore.pyqtSlot(object)
+    def _finish_simulation_task(self, result):
+        action = self._workspace_task_actions.pop(result.stamp.task_id, None)
+        history_status = self._history_status_for_result(result)
+        messages = ()
+        if result.status is TaskStatus.SUCCESS:
+            if action == "initialize":
+                self._simulation_session = result.value["session"]
+                self.simulation_panel.set_initialized(
+                    self._simulation_session.snapshot()
+                )
+                initial_cycle = result.value["initial_cycle"]
+                if initial_cycle is not None:
+                    self.simulation_panel.append_cycles((initial_cycle,))
+                    if initial_cycle.error is not None:
+                        history_status = HistoryTaskStatus.FAILED
+                        messages = (
+                            self._simulation_error_message(initial_cycle.error),
+                        )
+            elif action == "cycle":
+                self.simulation_panel.append_cycles((result.value,))
+                if result.value.error is not None:
+                    history_status = HistoryTaskStatus.FAILED
+                    messages = (self._simulation_error_message(result.value.error),)
+            elif action == "run":
+                self.simulation_panel.append_cycles(result.value.cycles)
+                if result.value.cancelled:
+                    history_status = HistoryTaskStatus.CANCELLED
+                    self.simulation_panel.show_cancelled()
+                elif result.value.cycles and result.value.cycles[-1].error is not None:
+                    history_status = HistoryTaskStatus.FAILED
+                    messages = (
+                        self._simulation_error_message(result.value.cycles[-1].error),
+                    )
+            elif action == "reset":
+                self.simulation_panel.set_initialized(result.value["snapshot"])
+                initial_cycle = result.value["initial_cycle"]
+                if initial_cycle is not None:
+                    self.simulation_panel.append_cycles((initial_cycle,))
+                    if initial_cycle.error is not None:
+                        history_status = HistoryTaskStatus.FAILED
+                        messages = (
+                            self._simulation_error_message(initial_cycle.error),
+                        )
+        elif result.status is TaskStatus.CANCELLED:
+            if action == "run" and result.value is not None:
+                self.simulation_panel.append_cycles(result.value.cycles)
+            self.simulation_panel.show_cancelled()
+        elif result.status is TaskStatus.STALE:
+            self._simulation_session = None
+            self.simulation_panel.invalidate()
+        else:
+            self.simulation_panel.show_error(result.error)
+        summary = {
+            HistoryTaskStatus.SUCCESS: "普通仿真操作完成",
+            HistoryTaskStatus.CANCELLED: "普通仿真已在 cycle 边界取消",
+            HistoryTaskStatus.STALE: "普通仿真结果已过期",
+        }.get(history_status, "普通仿真失败")
+        self._complete_workspace_history(
+            result, history_status, summary, messages=messages
+        )
+        self.simulation_task_finished.emit(result)
+
+    @staticmethod
+    def _simulation_error_message(error):
+        return {
+            "severity": "error",
+            "message": "{}: {}".format(error.type, error.message),
+            "cause_type": error.cause_type,
+            "cause_message": error.cause_message,
+        }
+
+    def _run_dynamic_validation(self, request):
+        mode = request.get("mode")
+        if mode == "user":
+            path = request.get("path")
+
+            def work(token):
+                return (None, self.dynamic_validation_service.run_scenario(path, cancel_token=token))
+
+            action = {"mode": "user", "path": path}
+            summary = "正在运行用户动态验证场景"
+        elif mode == "case":
+            case_id = request.get("case_id")
+
+            def work(token):
+                provenance = self.dynamic_validation_service.verify_packaged_provenance()
+                if provenance.status != "passed":
+                    raise ValueError("内置动态验证资源 provenance 校验失败")
+                return (
+                    provenance,
+                    self.dynamic_validation_service.run_packaged_case(
+                        case_id, cancel_token=token
+                    ),
+                )
+
+            action = {"mode": "case", "case_id": case_id}
+            summary = "正在运行内置动态验证用例"
+        elif mode == "suite":
+
+            def work(token):
+                provenance = self.dynamic_validation_service.verify_packaged_provenance()
+                if provenance.status != "passed":
+                    raise ValueError("内置动态验证资源 provenance 校验失败")
+                return (
+                    provenance,
+                    self.dynamic_validation_service.run_packaged_cases(
+                        cancel_token=token
+                    ),
+                )
+
+            action = {"mode": "suite"}
+            summary = "正在运行全部动态验证验收用例"
+        else:
+            self.dynamic_validation_panel.show_error("未知动态验证模式")
+            return None
+        return self._submit_workspace_task(
+            "dynamic-validation", action, work, summary
+        )
+
+    @QtCore.pyqtSlot(object)
+    def _finish_dynamic_validation_task(self, result):
+        action = self._workspace_task_actions.pop(result.stamp.task_id, None)
+        history_status = self._history_status_for_result(result)
+        messages = ()
+        artifacts = ()
+        if result.status is TaskStatus.SUCCESS and action == "export":
+            path = result.value
+            artifacts = (TaskArtifact(label="动态验证报告", path=path),)
+            self.dynamic_validation_panel.set_busy(False, "report-ready")
+        elif result.status is TaskStatus.SUCCESS:
+            provenance, report = result.value
+            self.dynamic_validation_panel.present_report(report, provenance=provenance)
+            if report.status == "cancelled":
+                history_status = HistoryTaskStatus.CANCELLED
+                self.dynamic_validation_panel.show_cancelled()
+            elif report.status in ("failed", "mismatch"):
+                history_status = HistoryTaskStatus.FAILED
+            messages = self._dynamic_report_messages(report)
+        elif result.status is TaskStatus.CANCELLED:
+            if result.value is not None and action != "export":
+                provenance, report = result.value
+                self.dynamic_validation_panel.present_report(
+                    report, provenance=provenance
+                )
+                messages = self._dynamic_report_messages(report)
+            self.dynamic_validation_panel.show_cancelled()
+        elif result.status is TaskStatus.STALE:
+            self.dynamic_validation_panel.show_error("结果已过期，请基于当前 revision 重试")
+        else:
+            self.dynamic_validation_panel.show_error(result.error)
+        summary = {
+            HistoryTaskStatus.SUCCESS: "动态验证完成",
+            HistoryTaskStatus.CANCELLED: "动态验证已在 step 边界取消",
+            HistoryTaskStatus.STALE: "动态验证结果已过期",
+        }.get(history_status, "动态验证未通过")
+        self._complete_workspace_history(
+            result,
+            history_status,
+            summary,
+            messages=messages,
+            artifacts=artifacts,
+        )
+        self.dynamic_validation_finished.emit(result)
+
+    @staticmethod
+    def _dynamic_report_messages(report):
+        messages = []
+        cases = report.cases if hasattr(report, "cases") else (report,)
+        for case in cases:
+            if case.failure is not None:
+                messages.append(
+                    {
+                        "severity": "error",
+                        "case_id": case.case_id,
+                        "message": case.failure.get("message", "case failed"),
+                    }
+                )
+            for step in case.steps:
+                if step.status not in ("passed", "expected_exception_passed"):
+                    messages.append(
+                        {
+                            "severity": "error",
+                            "case_id": case.case_id,
+                            "step": step.index,
+                            "message": json.dumps(
+                                step.diffs, ensure_ascii=False, sort_keys=True
+                            ),
+                        }
+                    )
+        return tuple(messages)
+
+    def _export_dynamic_validation_report(self):
+        content = self.dynamic_validation_panel.report_json()
+        if content is None:
+            return None
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            "导出动态验证报告",
+            "dynamic-validation-report.json",
+            "JSON 报告 (*.json)",
+        )
+        if not path:
+            return None
+        if not path.lower().endswith(".json"):
+            path += ".json"
+
+        def work(token):
+            token.raise_if_cancelled()
+            target = Path(path)
+            temporary = target.with_name(target.name + ".tmp")
+            try:
+                temporary.write_text(content, encoding="utf-8")
+                token.raise_if_cancelled()
+                os.replace(str(temporary), str(target))
+            finally:
+                try:
+                    temporary.unlink()
+                except OSError:
+                    pass
+            return str(target)
+
+        return self._submit_workspace_task(
+            "dynamic-validation", "export", work, "正在导出动态验证报告"
+        )
+
+    def _cancel_workspace_kind(self, kind):
+        record = next(
+            (
+                item
+                for item in reversed(self.task_center.records)
+                if item.kind == kind
+                and item.status
+                in {
+                    HistoryTaskStatus.QUEUED,
+                    HistoryTaskStatus.RUNNING,
+                    HistoryTaskStatus.CANCEL_REQUESTED,
+                }
+            ),
+            None,
+        )
+        return bool(record and self._cancel_task_record(record.task_id))
+
+    @staticmethod
+    def _history_status_for_result(result):
+        return {
+            TaskStatus.SUCCESS: HistoryTaskStatus.SUCCESS,
+            TaskStatus.FAILED: HistoryTaskStatus.FAILED,
+            TaskStatus.CANCELLED: HistoryTaskStatus.CANCELLED,
+            TaskStatus.STALE: HistoryTaskStatus.STALE,
+        }.get(result.status, HistoryTaskStatus.FAILED)
+
+    def _complete_workspace_history(
+        self, result, status, summary, messages=(), artifacts=()
+    ):
+        completion = {
+            "summary": summary,
+            "messages": messages,
+            "artifacts": artifacts,
+        }
+        if result.error is not None:
+            completion["exception"] = result.error
+        try:
+            self.task_center.complete_persistent(
+                result.stamp.task_id, status, **completion
+            )
+        except OSError as error:
+            self.statusbar.showMessage(
+                "任务历史写入失败，内存结果仍可查看：{}".format(error), 15000
+            )
+        finally:
+            self._task_handles.pop(result.stamp.task_id, None)
+            self._refresh_task_result_dock(show=True)
 
     def _refresh_task_result_dock(self, show=False):
         self.task_result_dock.refresh()

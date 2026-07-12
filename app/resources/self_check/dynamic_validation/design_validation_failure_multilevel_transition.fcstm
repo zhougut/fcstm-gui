@@ -1,0 +1,26 @@
+def int counter = 0;
+def int flag = 0;
+state Root {
+    state A {
+        during {
+            counter = counter + 1;
+        }
+    }
+
+    state B {
+        enter {
+            flag = 1;
+        }
+        state B1 {
+            during {
+                counter = counter + 10;
+            }
+        }
+        [*] -> B1 : if [flag == 2];
+    }
+
+    [*] -> A;
+    A -> B : if [counter >= 3] effect {
+        flag = 1;
+    };
+}

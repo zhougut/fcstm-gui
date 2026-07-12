@@ -1,0 +1,8 @@
+def int counter = 0;
+def int divisor = 0;
+state Root {
+    state A;
+    state B;
+    [*] -> A;
+    A -> B : if [1 / divisor > 0];
+}

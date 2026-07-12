@@ -1,0 +1,32 @@
+{
+  "schema": "fcstm-gui.dynamic-validation-provenance",
+  "version": 1,
+  "upstream_repository": "https://github.com/HansBug/pyfcstm",
+  "upstream_commit": "f142a656df43e0b80ed6b7ac63b0696345325646",
+  "cases": {
+    "design_validation_failure_multilevel_transition": {
+      "upstream_yaml_sha256": "cd40ed8699a9d80f0381a6738f2b28439832cb8b52fde144826f1c230af9b0a6",
+      "upstream_fcstm_sha256": "4ce8ae776d7efa0a9f00fa26097ac0eacd353501dbc03898114534fdf019353a",
+      "packaged_fcstm_sha256": "4ce8ae776d7efa0a9f00fa26097ac0eacd353501dbc03898114534fdf019353a",
+      "packaged_scenario_sha256": "a6aa32b9340f7032e05c8c0ec534dc827473c38f72bf91403c215035d9b76427"
+    },
+    "design_evented_pseudo_chain_invalid_then_valid": {
+      "upstream_yaml_sha256": "7d87cd9115b5c1e968485e60c330bf6f3be16c044f550d0cdb6cafd7d5ae0c67",
+      "upstream_fcstm_sha256": "b1c533e360ae87558ef7cd56dca46b1b22df169784494f2d2f37384cdc839492",
+      "packaged_fcstm_sha256": "b1c533e360ae87558ef7cd56dca46b1b22df169784494f2d2f37384cdc839492",
+      "packaged_scenario_sha256": "39d5ba4e857ca3e050e234414f7978e40ad23adb202d4dc3b7f579071ce2cd21"
+    },
+    "expression_failure_transition_guard_raises_expression_error": {
+      "upstream_yaml_sha256": "e3715a5e3582c529405c74a0539dbb026173ad4ee650a3e75b322396ad2df2a4",
+      "upstream_fcstm_sha256": "6d332728477db215774b8d1fdaf3196d6e52a165f030eba407569841c3d3d263",
+      "packaged_fcstm_sha256": "6d332728477db215774b8d1fdaf3196d6e52a165f030eba407569841c3d3d263",
+      "packaged_scenario_sha256": "e9e104c8b627d45424ed9444d2e526b68993e14e6a89a487980bf3b593330b42"
+    },
+    "pseudo_self_loop_step_limit_raises_dfs_error": {
+      "upstream_yaml_sha256": "439d3b42c28a7d97dfaf2825d86dd8e80cf6a11895997124980769f585349fa7",
+      "upstream_fcstm_sha256": "3a0f79e2e12f4ff32ae11dabc5c48748931f9e5acf0e4947cc392a82cb5a0648",
+      "packaged_fcstm_sha256": "3a0f79e2e12f4ff32ae11dabc5c48748931f9e5acf0e4947cc392a82cb5a0648",
+      "packaged_scenario_sha256": "63b6546b4f26ffc369d9f38a3b1913096de6580f5dcc39241fdeb6af29fff283"
+    }
+  }
+}

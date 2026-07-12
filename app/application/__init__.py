@@ -31,6 +31,19 @@ from .formulas import (
     FormulaValidationStatus,
 )
 from .task_runner import CancellationToken, TaskRunner, TaskStatus
+from .dynamic_validation import (
+    DynamicValidationCaseReport,
+    DynamicValidationProvenanceReport,
+    DynamicValidationService,
+    DynamicValidationSuiteReport,
+)
+from .simulation import (
+    SimulationCycleResult,
+    SimulationRunResult,
+    SimulationService,
+    SimulationSession,
+    SimulationSnapshot,
+)
 from .tasks import (
     HistoryCorruptWarning,
     PathRedactor,
@@ -46,6 +59,10 @@ __all__ = [
     "CommandStateError",
     "DocumentCommandStack",
     "DocumentService",
+    "DynamicValidationCaseReport",
+    "DynamicValidationProvenanceReport",
+    "DynamicValidationService",
+    "DynamicValidationSuiteReport",
     "DiagnosticItem",
     "DiagnosticQuery",
     "DiagnosticReport",
@@ -68,6 +85,11 @@ __all__ = [
     "HistoryTaskStatus",
     "InvalidEventNameError",
     "PathRedactor",
+    "SimulationCycleResult",
+    "SimulationRunResult",
+    "SimulationService",
+    "SimulationSession",
+    "SimulationSnapshot",
     "TaskArtifact",
     "TaskBoundary",
     "TaskCenter",

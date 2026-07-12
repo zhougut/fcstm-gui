@@ -1,0 +1,15 @@
+{
+  "schema": "fcstm-gui.dynamic-validation-scenario",
+  "version": 1,
+  "case_id": "design_validation_failure_multilevel_transition",
+  "upstream_case_id": "design_validation_failure_multilevel_transition",
+  "upstream_commit": "f142a656df43e0b80ed6b7ac63b0696345325646",
+  "model_file": "design_validation_failure_multilevel_transition.fcstm",
+  "initial": {"state": null, "variables": {}},
+  "steps": [
+    {"events": [], "commands": [], "expected": {"state": "Root.A", "variables": {"counter": 1, "flag": 0}, "ended": false}},
+    {"events": [], "commands": [], "expected": {"state": "Root.A", "variables": {"counter": 2, "flag": 0}, "ended": false}},
+    {"events": [], "commands": [], "expected": {"state": "Root.A", "variables": {"counter": 3, "flag": 0}, "ended": false}},
+    {"events": [], "commands": [], "expected": {"state": "Root.A", "variables": {"counter": 4, "flag": 0}, "ended": false}}
+  ]
+}
