@@ -124,6 +124,23 @@ def test_final_visual_review_schema_is_strict_and_function_blocking():
     ):
         assert items["items"]["properties"][verdict]["const"] is True
 
+    acceptance_schema = json.loads(
+        (
+            ROOT
+            / "app"
+            / "resources"
+            / "self_check"
+            / "acceptance_check_report.schema.json"
+        ).read_text(encoding="utf-8")
+    )
+    exemption = acceptance_schema["properties"]["geometry"]["properties"][
+        "overlap_exemptions"
+    ]["items"]
+    assert set(exemption["properties"]["parent"]["enum"]) == {
+        "ordinary_simulation_panel",
+        "dynamic_validation_panel",
+    }
+
 
 def test_build_workflow_keeps_fresh_products_independent_of_host_toolchains():
     workflow = BUILD_WORKFLOW.read_text(encoding="utf-8")

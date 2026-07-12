@@ -88,6 +88,18 @@ def test_overlap_exemption_verifier_requires_exact_cocoa_functional_record(tmp_p
 
     _verify_overlap_exemptions(report, tmp_path)
 
+    exemption = report["geometry"]["overlap_exemptions"][0]
+    exemption["join_key"] = (
+        "Darwin|onefile|1280x720|1|geometry.active-workspaces|"
+        "dynamic_run_case_button|dynamic_run_user_button"
+    )
+    exemption["parent"] = "dynamic_validation_panel"
+    exemption["widgets"] = [
+        "dynamic_run_case_button",
+        "dynamic_run_user_button",
+    ]
+    _verify_overlap_exemptions(report, tmp_path)
+
     report["geometry"]["overlap_exemptions"][0]["click_passed"] = False
     with pytest.raises(ContractError, match="functional verdict"):
         _verify_overlap_exemptions(report, tmp_path)

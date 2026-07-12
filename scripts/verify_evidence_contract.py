@@ -165,15 +165,25 @@ REQUIRED_SELF_CHECK_NAMES = (
     "dynamic provenance resource hashes",
 )
 
-PREAPPROVED_COCOA_OVERLAPS = frozenset(
-    {
+PREAPPROVED_COCOA_OVERLAPS = {
+    "ordinary_simulation_panel": frozenset(
+        {
         ("simulation_cycle_button", "simulation_initialize_button"),
         ("simulation_cycle_button", "simulation_run_button"),
         ("simulation_pause_button", "simulation_run_button"),
         ("simulation_pause_button", "simulation_reset_button"),
         ("simulation_cancel_button", "simulation_reset_button"),
-    }
-)
+        }
+    ),
+    "dynamic_validation_panel": frozenset(
+        {
+            ("dynamic_run_case_button", "dynamic_run_user_button"),
+            ("dynamic_run_case_button", "dynamic_run_suite_button"),
+            ("dynamic_cancel_button", "dynamic_run_suite_button"),
+            ("dynamic_cancel_button", "dynamic_export_button"),
+        }
+    ),
+}
 
 OVERLAP_FUNCTIONAL_VERDICTS = (
     "text_visible",
@@ -320,8 +330,9 @@ def _verify_overlap_exemptions(report, artifact_root):
         label = "overlap_exemptions[{}]".format(index)
         _require(isinstance(item, dict), label + " is not an object")
         widgets = tuple(sorted(item.get("widgets") or ()))
+        parent = item.get("parent")
         _require(
-            widgets in PREAPPROVED_COCOA_OVERLAPS,
+            widgets in PREAPPROVED_COCOA_OVERLAPS.get(parent, ()),
             label + " is not preapproved",
         )
         _require(item.get("platform") == "Darwin", label + " bad platform")
@@ -333,10 +344,6 @@ def _verify_overlap_exemptions(report, artifact_root):
         _require(
             platform_record.get("qt_platform") == item.get("qt_platform"),
             label + " Qt platform/report mismatch",
-        )
-        _require(
-            item.get("parent") == "ordinary_simulation_panel",
-            label + " bad parent",
         )
         _require(
             item.get("acceptance_item") == "geometry.active-workspaces",

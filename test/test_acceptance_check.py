@@ -29,6 +29,12 @@ def test_native_overlap_preapproval_is_exact_and_function_oriented():
     assert _is_preapproved_native_overlap(
         "Darwin", "cocoa", "ordinary_simulation_panel", allowed
     )
+    assert _is_preapproved_native_overlap(
+        "Darwin",
+        "cocoa",
+        "dynamic_validation_panel",
+        ("dynamic_run_case_button", "dynamic_run_user_button"),
+    )
     assert not _is_preapproved_native_overlap(
         "Linux", "xcb", "ordinary_simulation_panel", allowed
     )

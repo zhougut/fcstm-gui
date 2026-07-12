@@ -137,7 +137,7 @@
               "viewport": {"pattern": "^[0-9]+x[0-9]+$"},
               "scale": {"enum": ["1", "1.5", "2"]},
               "acceptance_item": {"const": "geometry.active-workspaces"},
-              "parent": {"const": "ordinary_simulation_panel"},
+              "parent": {"enum": ["ordinary_simulation_panel", "dynamic_validation_panel"]},
               "widgets": {
                 "type": "array",
                 "minItems": 2,

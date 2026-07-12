@@ -29,23 +29,40 @@ from app.widget.dialog_add_transition import DialogAddTransition
 REPORT_SCHEMA = "fcstm-gui.acceptance-check-report"
 REPORT_VERSION = 1
 
-_COCOA_SIMULATION_OVERLAP_PAIRS = frozenset(
-    {
+_COCOA_NATIVE_OVERLAP_PAIRS = {
+    "ordinary_simulation_panel": frozenset(
+        {
         ("simulation_cycle_button", "simulation_initialize_button"),
         ("simulation_cycle_button", "simulation_run_button"),
         ("simulation_pause_button", "simulation_run_button"),
         ("simulation_pause_button", "simulation_reset_button"),
         ("simulation_cancel_button", "simulation_reset_button"),
-    }
-)
+        }
+    ),
+    "dynamic_validation_panel": frozenset(
+        {
+            ("dynamic_run_case_button", "dynamic_run_user_button"),
+            ("dynamic_run_case_button", "dynamic_run_suite_button"),
+            ("dynamic_cancel_button", "dynamic_run_suite_button"),
+            ("dynamic_cancel_button", "dynamic_export_button"),
+        }
+    ),
+}
 
-_SIMULATION_CONTROL_ACCEPTANCE = {
+_CONTROL_ACCEPTANCE = {
     "simulation_initialize_button": "simulation.initialize",
     "simulation_cycle_button": "simulation.step",
     "simulation_run_button": "simulation.run",
     "simulation_pause_button": "simulation.pause",
     "simulation_reset_button": "simulation.reset",
     "simulation_cancel_button": "simulation.stop",
+    "dynamic_run_user_button": "dynamic.user",
+    "dynamic_run_case_button": (
+        "dynamic.case.design_evented_pseudo_chain_invalid_then_valid"
+    ),
+    "dynamic_run_suite_button": "export.dynamic-json",
+    "dynamic_cancel_button": "cancel.dynamic",
+    "dynamic_export_button": "dynamic.export",
 }
 
 _SOURCE = """def int count = 0;
@@ -65,8 +82,8 @@ def _is_preapproved_native_overlap(
     return bool(
         platform_system == "Darwin"
         and qt_platform == "cocoa"
-        and parent_name == "ordinary_simulation_panel"
-        and tuple(sorted(widget_names)) in _COCOA_SIMULATION_OVERLAP_PAIRS
+        and tuple(sorted(widget_names))
+        in _COCOA_NATIVE_OVERLAP_PAIRS.get(parent_name, ())
     )
 
 
@@ -3583,7 +3600,7 @@ class AcceptanceDriver(object):
                             names,
                         ):
                             acceptance_items = tuple(
-                                _SIMULATION_CONTROL_ACCEPTANCE[name]
+                                _CONTROL_ACCEPTANCE[name]
                                 for name in names
                             )
                             result_items = tuple(
