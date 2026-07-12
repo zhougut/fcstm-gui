@@ -15,6 +15,7 @@ from pathlib import Path
 from PyQt5 import QtCore, QtGui, QtTest, QtWidgets
 
 from app.model.session import ValidationState
+from app.utils.application_font import EXPECTED_FAMILY
 from app.widget import AppMainWindow, DialogCodeGen, DialogExport
 
 
@@ -437,6 +438,9 @@ class AcceptanceDriver(object):
     def geometry(self):
         self.window.resize(*self.viewport)
         self.app.processEvents()
+        font_family = self.app.font().family()
+        if font_family != EXPECTED_FAMILY:
+            raise RuntimeError("bundled CJK font is not active: " + font_family)
         names = (
             'source_editor', 'diagnostics_table', 'graph_view',
             'simulation_transcript_table', 'dynamic_result_table',
@@ -480,6 +484,7 @@ class AcceptanceDriver(object):
         self.context['geometry'] = {
             'viewport': '{}x{}'.format(*self.viewport),
             'qt_scale_factor': os.environ.get('QT_SCALE_FACTOR', '1'),
+            'font_family': font_family,
             'controls': controls,
             'buttons': buttons,
         }

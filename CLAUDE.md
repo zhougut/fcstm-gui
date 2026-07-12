@@ -127,6 +127,10 @@ always expose the same contract.
 - Exercise GUI acceptance across the cross product of 1280x720 and 1920x1080
   with Qt scale factors 1, 1.5, and 2. Inspect representative pixels in
   addition to checking widget geometry numerically.
+- Numeric geometry cannot detect missing glyphs. Fresh Linux and Windows
+  runners may lack a usable CJK fallback even when every widget fits; keep the
+  OFL-licensed bundled font loaded as the application family, assert that
+  family in reports, and inspect fresh-runner screenshots before release.
 
 ## Required Local Evidence
 

@@ -152,6 +152,40 @@ def _check_qt_native_widgets():
     return 'QScintilla + qtawesome + qtmodern OK'
 
 
+def _check_qt_cjk_font():
+    import hashlib
+    from PyQt5 import QtCore, QtGui
+    from PyQt5.QtWidgets import QApplication
+    from app.utils.application_font import (
+        EXPECTED_FAMILY,
+        FONT_SHA256,
+        bundled_font_path,
+        install_application_font,
+    )
+    app = QApplication.instance() or QApplication([])
+    data = bundled_font_path().read_bytes()
+    if hashlib.sha256(data).hexdigest() != FONT_SHA256:
+        raise RuntimeError('bundled CJK font SHA-256 mismatch')
+    family = install_application_font(app)
+    if family != EXPECTED_FAMILY or app.font().family() != EXPECTED_FAMILY:
+        raise RuntimeError('bundled CJK font did not become the application font')
+    image = QtGui.QImage(320, 80, QtGui.QImage.Format_ARGB32)
+    image.fill(QtCore.Qt.white)
+    painter = QtGui.QPainter(image)
+    painter.setFont(QtGui.QFont(EXPECTED_FAMILY, 18))
+    painter.setPen(QtCore.Qt.black)
+    painter.drawText(image.rect(), QtCore.Qt.AlignCenter, '状态机动态验证')
+    painter.end()
+    dark_pixels = 0
+    for y in range(image.height()):
+        for x in range(image.width()):
+            if QtGui.qGray(image.pixel(x, y)) < 220:
+                dark_pixels += 1
+    if dark_pixels < 200:
+        raise RuntimeError('bundled CJK font produced no visible Chinese text')
+    return '{} rendered {} dark pixels'.format(family, dark_pixels)
+
+
 def _check_office_roundtrips():
     from io import BytesIO
     from docx import Document
@@ -601,6 +635,7 @@ def _checks():
                    ('Z3 Optimize maximize', _check_z3_optimize),
                    ('Qt application', _check_qt_application),
                    ('Qt native widgets and assets', _check_qt_native_widgets),
+                   ('Qt bundled CJK font rendering', _check_qt_cjk_font),
                    ('XLSX and DOCX roundtrips', _check_office_roundtrips),
                    ('PlantUML Java PNG render', _check_plantuml_render),
                    ('main GUI window lifecycle', _check_main_window),

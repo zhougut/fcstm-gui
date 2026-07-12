@@ -63,6 +63,7 @@ from app.utils.dsl_to_ui import (
 )
 from app.utils.export_to_word import export_statechart_to_word
 from app.utils.export_to_excel import export_statechart_to_excel
+from app.utils.application_font import install_application_font
 from app.utils.ui_to_dsl import (
     format_lifecycle_item,
     format_state,
@@ -167,6 +168,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         task_center=None,
     ):
         QMainWindow.__init__(self)
+        self.application_font_family = install_application_font()
         self.setupUi(self)
         self.workspace_tabs = self.workbench_tabs
         self.frame_all_state = self.model_explorer_panel
@@ -746,8 +748,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self.button_initial_import_state_machine.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
 
     def _init_text_edit_style(self):
-        # 设置字体为微软雅黑，大小为11号
-        font = QtGui.QFont("微软雅黑", 11)
+        font = QtGui.QFont(QtWidgets.QApplication.font().family(), 11)
 
         # 设置字体
         self.edit_var_def.setFont(font)

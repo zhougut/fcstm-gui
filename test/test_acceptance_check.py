@@ -32,3 +32,4 @@ def test_full_gui_acceptance_writes_report(qtbot, tmp_path, monkeypatch):
     assert report["counts"] == {"total": 11, "passed": 11, "failed": 0}
     assert len(report["artifacts"]) >= 8
     assert report["geometry"]["viewport"] == "1280x720"
+    assert report["geometry"]["font_family"] == "Noto Sans CJK SC"

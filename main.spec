@@ -7,6 +7,7 @@ from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, co
 mode = os.environ.get('FCSTM_GUI_BUILD_MODE', 'onedir').lower()
 datas = [
     ('docs/plantuml.jar', 'docs'),
+    ('app/resources/fonts', 'app/resources/fonts'),
     (
         'app/resources/self_check/dynamic_validation',
         'app/resources/self_check/dynamic_validation',
