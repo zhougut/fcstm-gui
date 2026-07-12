@@ -4,6 +4,9 @@ from PyQt5.QtCore import Qt
 
 from ..ui import UIDialogAddTransition
 from ..model import StateManager, State
+from .formula_editor import FormulaEditor
+from ..application.formulas import FormulaKind
+from app.utils.dsl_to_ui import extract_variable_definitions
 
 class DialogAddTransition(QDialog, UIDialogAddTransition):
     def __init__(self, parent, state_manager: StateManager, current_state: State,
@@ -11,7 +14,7 @@ class DialogAddTransition(QDialog, UIDialogAddTransition):
                  transition_index: int = -1, mutate_model: bool = True):
         QDialog.__init__(self, parent)
         self.setupUi(self)
-        self.setFixedSize(self.width(), self.height())
+        self.setMinimumSize(self.size())
 
         self.state_manager = state_manager
         self.current_state = current_state
@@ -29,6 +32,12 @@ class DialogAddTransition(QDialog, UIDialogAddTransition):
         self._init_button_reject()
 
     def _init_ui(self):
+        self.condition_formula_editor = self._wrap_formula_field(
+            self.edit_condition, FormulaKind.LOGICAL, 3, allow_empty=True
+        )
+        self.effect_formula_editor = self._wrap_formula_field(
+            self.edit_op, FormulaKind.EFFECT, 4, allow_empty=True
+        )
         # 为事件输入框添加占位符提示
         self.edit_event.setPlaceholderText("例如: event_name 或 :: event_name 或 : A.event_name")
         
@@ -37,6 +46,31 @@ class DialogAddTransition(QDialog, UIDialogAddTransition):
             self._populate_edit_data()
         else:
             self.setWindowTitle("添加转移")
+
+    def _wrap_formula_field(self, field, kind, row, allow_empty):
+        self.gridLayout.removeWidget(field)
+        editor = FormulaEditor(
+            field,
+            kind,
+            revision_provider=self._source_revision,
+            variable_definitions_provider=self._variable_definitions,
+            allow_empty=allow_empty,
+            parent=self.frame,
+        )
+        self.gridLayout.addWidget(editor, row, 1)
+        return editor
+
+    def _source_revision(self):
+        session = getattr(self.parent(), "document_session", None)
+        return session.source_revision if session is not None else 0
+
+    def _variable_definitions(self):
+        session = getattr(self.parent(), "document_session", None)
+        return (
+            extract_variable_definitions(session.source_text)
+            if session is not None
+            else None
+        )
 
     def _populate_edit_data(self):
         """填充编辑数据到界面控件"""
@@ -71,6 +105,14 @@ class DialogAddTransition(QDialog, UIDialogAddTransition):
 
     def _on_accept(self):
         try:
+            if not self.condition_formula_editor.validate_now():
+                QtWidgets.QMessageBox.warning(self, "条件无效", "请修正条件公式后再提交。")
+                self.edit_condition.setFocus()
+                return
+            if not self.effect_formula_editor.validate_now():
+                QtWidgets.QMessageBox.warning(self, "操作无效", "请修正迁移动作后再提交。")
+                self.edit_op.setFocus()
+                return
             # 获取用户输入
             source_state = self.edit_source_state.text().strip()
             target_state = self.edit_target_state.text().strip()

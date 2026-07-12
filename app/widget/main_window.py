@@ -1,8 +1,9 @@
 from dataclasses import dataclass, replace
-from typing import Optional, Dict, List
+from typing import Optional
 import os
 import time
 import uuid
+from pathlib import Path
 
 import PyQt5.Qt
 from PyQt5 import QtWidgets, QtGui, QtCore
@@ -28,6 +29,10 @@ from app.application.events import (
     EventProjectionError,
     EventProjectionService,
     EventReadOnlyError,
+)
+from app.application.diagnostics import (
+    DiagnosticService,
+    DiagnosticSourceKind,
 )
 from app.application.task_runner import (
     TaskResult,
@@ -63,6 +68,7 @@ from .dialog_code_gen import DialogCodeGen
 from .dialog_add_lifecycle import DialogAddLifecycle
 from .dialog_add_transition import DialogAddTransition
 from .task_result_dock import TaskResultDock
+from .diagnostics_panel import DiagnosticsPanel
 import re
 
 
@@ -130,6 +136,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self.code_file_path = "./"
         self.state_machine_file_path = "./"
         self.document_service = document_service or DocumentService()
+        self.diagnostic_service = DiagnosticService()
         self.event_service = EventProjectionService(self.document_service)
         self.document_session = None
         self.settings = settings if settings is not None else QtCore.QSettings(
@@ -169,6 +176,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         #初始化菜单栏
         self._init_menu_bar()
         self._init_source_editor()
+        self._init_diagnostics_panel()
         self._init_workbench_layout()
         self._init_event_panel()
         self._init_task_result_dock()
@@ -357,10 +365,26 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self.source_editor.textChanged.connect(self._on_source_text_changed)
         self.action_save_state_machine.setEnabled(False)
 
+    def _init_diagnostics_panel(self):
+        layout = self.diagnostics_workspace.layout()
+        if layout is None:
+            layout = QtWidgets.QVBoxLayout(self.diagnostics_workspace)
+            layout.setContentsMargins(0, 0, 0, 0)
+        self.diagnostics_panel = DiagnosticsPanel(
+            self.diagnostics_workspace,
+            redactor=self.task_center.redactor.redact_text,
+        )
+        layout.addWidget(self.diagnostics_panel)
+        self.diagnostics_panel.locate_requested.connect(
+            self._locate_diagnostic
+        )
+        self.diagnostics_panel.suggested_fix_requested.connect(
+            self._apply_diagnostic_suggested_fix
+        )
+
     def _init_workbench_layout(self):
         for page in (
             self.graph_workspace,
-            self.diagnostics_workspace,
             self.simulation_workspace,
             self.dynamic_validation_workspace,
         ):
@@ -1428,6 +1452,10 @@ class AppMainWindow(QMainWindow, UIMainWindow):
 
         self.document_session = session
         self.state_manager = manager
+        self.at_page_initial = False
+        self.stackedWidget_state_machine.setCurrentWidget(
+            self.page_state_machine_detail
+        )
         self._restore_state_tree_selection(preserve_selected_state_path)
         self.model_explorer_dock.show()
         self.property_inspector_dock.show()
@@ -1479,6 +1507,13 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self.button_add_state.setEnabled(session is None or current_valid)
         self.button_lifecycle.setEnabled(session is None or current_valid)
         self.button_transition.setEnabled(session is None or current_valid)
+        diagnostics_index = self.workspace_tabs.indexOf(
+            self.diagnostics_workspace
+        )
+        self.workspace_tabs.setTabEnabled(
+            diagnostics_index, session is not None
+        )
+        self._refresh_diagnostics_panel()
         self.setWindowModified(bool(session and session.dirty))
         if session is not None:
             self.setWindowFilePath(session.path)
@@ -1507,6 +1542,224 @@ class AppMainWindow(QMainWindow, UIMainWindow):
             self.document_dependency_label.setText(
                 "依赖 {}".format(dependency_count)
             )
+
+    def _refresh_diagnostics_panel(self):
+        redactor = (
+            (lambda value: value)
+            if self.task_result_dock.show_full_paths_action.isChecked()
+            else self.task_center.redactor.redact_text
+        )
+        self.diagnostics_panel.set_redactor(redactor)
+        session = self.document_session
+        if session is None or not session.current_diagnostics:
+            self.diagnostics_panel.clear()
+            return
+        snapshot = session.current_valid_snapshot or session.last_valid_snapshot
+        dependency_fingerprint = (
+            snapshot.dependency_fingerprint if snapshot is not None else None
+        )
+        source_kind = DiagnosticSourceKind(
+            session.diagnostic_source_kind
+            or (
+                "syntax"
+                if session.validation_state is ValidationState.INVALID_SYNTAX
+                else "model"
+            )
+        )
+        source_uri = Path(
+            os.path.normcase(str(canonical_path(session.path)))
+        ).as_uri()
+        report = self.diagnostic_service.from_native_items(
+            session.current_diagnostics,
+            source_kind,
+            source_uri,
+            session.source_revision,
+            dependency_fingerprint,
+        )
+        self.diagnostics_panel.set_report(
+            report,
+            session.source_revision,
+            dependency_fingerprint,
+        )
+
+    def _locate_diagnostic(self, item):
+        session = self.document_session
+        if (
+            session is None
+            or item.source_revision != session.source_revision
+            or item.span is None
+        ):
+            return False
+        if not self._diagnostic_stamp_current(item):
+            return False
+        snapshot = session.current_valid_snapshot or session.last_valid_snapshot
+        root_uri = Path(
+            os.path.normcase(str(canonical_path(session.path)))
+        ).as_uri()
+        if item.source_uri == root_uri:
+            editor = self.source_editor
+            self.workspace_tabs.setCurrentWidget(self.source_workspace)
+        else:
+            if snapshot is None:
+                return False
+            document = next(
+                (
+                    candidate
+                    for candidate in snapshot.source_index.documents.values()
+                    if candidate.uri == item.source_uri
+                ),
+                None,
+            )
+            if document is None:
+                return False
+            editor = self._imported_source_editor(document)
+        document = editor.document()
+        start_block = document.findBlockByNumber(max(0, item.span.line - 1))
+        if not start_block.isValid():
+            return False
+        start = min(
+            start_block.position() + max(0, item.span.column),
+            start_block.position() + max(0, start_block.length() - 1),
+        )
+        end = start + max(1, len(item.offending_symbol_text or ""))
+        if item.span.end_line is not None and item.span.end_column is not None:
+            end_block = document.findBlockByNumber(
+                max(0, item.span.end_line - 1)
+            )
+            if end_block.isValid():
+                end = end_block.position() + max(0, item.span.end_column)
+        cursor = editor.textCursor()
+        cursor.setPosition(start)
+        cursor.setPosition(min(end, document.characterCount() - 1), QtGui.QTextCursor.KeepAnchor)
+        editor.setTextCursor(cursor)
+        QtCore.QTimer.singleShot(0, editor.setFocus)
+        return True
+
+    def _diagnostic_stamp_current(self, item):
+        session = self.document_session
+        if session is None or item.source_revision != session.source_revision:
+            return False
+        snapshot = session.current_valid_snapshot or session.last_valid_snapshot
+        current_dependency_fingerprint = (
+            snapshot.dependency_fingerprint if snapshot is not None else None
+        )
+        if (
+            item.dependency_fingerprint != current_dependency_fingerprint
+            or (
+                snapshot is not None
+                and not snapshot.source_index.matches_dependencies_on_disk()
+            )
+        ):
+            return False
+        return True
+
+    def _apply_diagnostic_suggested_fix(self, item):
+        if not self._diagnostic_stamp_current(item):
+            return False
+        fix = item.suggested_fix
+        if fix is None:
+            return False
+        preview = fix.text_template or "（删除目标源码）"
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "建议修复预览",
+            "{}\n\n修改：\n{}\n\n确认应用并重新校验？".format(
+                fix.rationale, preview
+            ),
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        if reply != QtWidgets.QMessageBox.Yes:
+            return False
+        refs = item.refs or {}
+        if fix.kind == "insert":
+            owner_path = refs.get("parent_path") or refs.get("composite_path")
+            state = (
+                self.state_manager.get_state_by_path(owner_path)
+                if self.state_manager is not None and owner_path
+                else None
+            )
+            if state is not None:
+                return self._insert_state_declaration(
+                    state, "transition", fix.text_template.strip()
+                )
+        elif fix.kind == "delete":
+            snapshot = self.document_session.require_current_valid_snapshot()
+            source_ref = None
+            if fix.target == "variable_definition":
+                name = refs.get("definition_delete_anchor")
+                source_ref = next(
+                    (
+                        candidate
+                        for candidate in snapshot.source_index.refs(kind="variable")
+                        if candidate.stable_key == "variable:{}".format(name)
+                    ),
+                    None,
+                )
+            elif fix.target == "effect_self_assign_statement":
+                name = refs.get("effect_self_assign_anchor")
+                expected = "{} = {};".format(name, name)
+                transition_range = self._diagnostic_ref_offset_range(
+                    snapshot.source_index.root_document,
+                    refs.get("transition_span"),
+                )
+                source_ref = next(
+                    (
+                        candidate
+                        for candidate in snapshot.source_index.refs(kind="action")
+                        if snapshot.source_index.text_for_ref(candidate).strip()
+                        == expected
+                        and transition_range is not None
+                        and transition_range[0]
+                        <= candidate.span.start_offset
+                        < candidate.span.end_offset
+                        <= transition_range[1]
+                    ),
+                    None,
+                )
+            if source_ref is not None and source_ref.editable:
+                edit = TextEdit.for_ref(
+                    self.document_session.source_revision,
+                    source_ref,
+                    "",
+                    intent="apply suggested fix",
+                )
+                return self._commit_form_edits(
+                    (edit,),
+                    preview_title="应用建议修复",
+                    declaration_ref=source_ref,
+                )
+        QtWidgets.QMessageBox.warning(
+            self,
+            "无法应用建议修复",
+            "当前 revision 无法将上游建议安全映射到可编辑源码。",
+        )
+        return False
+
+    @staticmethod
+    def _diagnostic_ref_offset_range(document, span):
+        if span is None:
+            return None
+
+        def field(name):
+            if hasattr(span, "get"):
+                return span.get(name)
+            return getattr(span, name, None)
+
+        line = field("line")
+        column = field("column")
+        end_line = field("end_line")
+        end_column = field("end_column")
+        if not all(
+            isinstance(value, int)
+            for value in (line, column, end_line, end_column)
+        ):
+            return None
+        if line < 1 or end_line < line or end_line > len(document.line_index):
+            return None
+        start = document.line_index[line - 1] + max(0, column)
+        end = document.line_index[end_line - 1] + max(0, end_column)
+        return max(0, start), min(len(document.text), end)
 
     def _update_document_name_label(self):
         width = max(40, self.document_name_label.width() - 4)
@@ -1780,7 +2033,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
             
             # 解析DSL
             ast_node = parse_with_grammar_entry(dsl_content, entry_name='state_machine_dsl')
-            state_machine = parse_dsl_node_to_state_machine(ast_node)
+            parse_dsl_node_to_state_machine(ast_node)
             
             # 验证成功
             QtWidgets.QMessageBox.information(self, "验证结果", "状态机验证通过！")

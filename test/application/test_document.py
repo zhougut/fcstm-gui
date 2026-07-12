@@ -56,18 +56,27 @@ def test_load_warning_document_is_valid_with_warnings(tmp_path):
     assert session.validation_state is ValidationState.VALID_WITH_WARNINGS
     assert session.validated_revision == 0
     assert any(item.severity == "warning" for item in session.current_diagnostics)
+    assert session.diagnostic_source_kind == "inspect"
 
 
 @pytest.mark.unittest
 @pytest.mark.parametrize(
-    ("source", "expected"),
+    ("source", "expected", "source_kind"),
     [
-        ("state Broken { state ; }", ValidationState.INVALID_SYNTAX),
-        ("state Root { state A; state A; }", ValidationState.INVALID_MODEL),
+        (
+            "state Broken { state ; }",
+            ValidationState.INVALID_SYNTAX,
+            "syntax",
+        ),
+        (
+            "state Root { state A; state A; }",
+            ValidationState.INVALID_MODEL,
+            "model",
+        ),
     ],
 )
 def test_invalid_document_opens_as_editable_source_without_snapshot(
-    tmp_path, source, expected
+    tmp_path, source, expected, source_kind
 ):
     path = tmp_path / "invalid.fcstm"
     path.write_text(source, encoding="utf-8")
@@ -79,6 +88,7 @@ def test_invalid_document_opens_as_editable_source_without_snapshot(
     assert session.validated_revision is None
     assert session.last_valid_snapshot is None
     assert session.current_diagnostics
+    assert session.diagnostic_source_kind == source_kind
 
 
 @pytest.mark.unittest

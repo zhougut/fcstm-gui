@@ -386,18 +386,21 @@ class DocumentService:
                 ValidationState.INVALID_SYNTAX,
                 _diagnostics_for_exception(error),
                 None,
+                diagnostic_source_kind="syntax",
             )
         except (ModelValidationError, SyntaxError) as error:
             return session.with_validation(
                 ValidationState.INVALID_MODEL,
                 _diagnostics_for_exception(error),
                 None,
+                diagnostic_source_kind="model",
             )
         except SourceIndexError as error:
             return session.with_validation(
                 ValidationState.STALE_DEPENDENCY,
                 _diagnostics_for_exception(error),
                 None,
+                diagnostic_source_kind="model",
             )
 
         diagnostics = tuple(report.diagnostics)
@@ -407,7 +410,10 @@ class DocumentService:
         }
         if "error" in severities:
             return session.with_validation(
-                ValidationState.INVALID_MODEL, diagnostics, None
+                ValidationState.INVALID_MODEL,
+                diagnostics,
+                None,
+                diagnostic_source_kind="inspect",
             )
         state = (
             ValidationState.VALID_WITH_WARNINGS
@@ -422,7 +428,12 @@ class DocumentService:
             dependency_fingerprint=index.dependency_fingerprint,
             dependency_manifest=index.dependency_manifest,
         )
-        return session.with_validation(state, diagnostics, snapshot)
+        return session.with_validation(
+            state,
+            diagnostics,
+            snapshot,
+            diagnostic_source_kind="inspect",
+        )
 
     @staticmethod
     def _load_and_inspect(source_text: str, path: str):

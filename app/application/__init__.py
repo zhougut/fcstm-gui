@@ -4,6 +4,15 @@ from .commands import (
     TextTransactionCommand,
 )
 from .document import DocumentService, TextEdit
+from .diagnostics import (
+    DiagnosticItem,
+    DiagnosticQuery,
+    DiagnosticReport,
+    DiagnosticService,
+    DiagnosticSourceKind,
+    DiagnosticSpan,
+    SuggestedFix,
+)
 from .events import (
     EventConflictError,
     EventNotFoundError,
@@ -12,6 +21,14 @@ from .events import (
     EventProjectionService,
     EventReadOnlyError,
     InvalidEventNameError,
+)
+from .formulas import (
+    FormulaKind,
+    FormulaLocation,
+    FormulaValidationRequest,
+    FormulaValidationResult,
+    FormulaValidationService,
+    FormulaValidationStatus,
 )
 from .task_runner import CancellationToken, TaskRunner, TaskStatus
 from .tasks import (
@@ -29,12 +46,24 @@ __all__ = [
     "CommandStateError",
     "DocumentCommandStack",
     "DocumentService",
+    "DiagnosticItem",
+    "DiagnosticQuery",
+    "DiagnosticReport",
+    "DiagnosticService",
+    "DiagnosticSourceKind",
+    "DiagnosticSpan",
     "EventConflictError",
     "EventNotFoundError",
     "EventProjection",
     "EventProjectionError",
     "EventProjectionService",
     "EventReadOnlyError",
+    "FormulaKind",
+    "FormulaLocation",
+    "FormulaValidationRequest",
+    "FormulaValidationResult",
+    "FormulaValidationService",
+    "FormulaValidationStatus",
     "HistoryCorruptWarning",
     "HistoryTaskStatus",
     "InvalidEventNameError",
@@ -47,4 +76,5 @@ __all__ = [
     "TaskStatus",
     "TextEdit",
     "TextTransactionCommand",
+    "SuggestedFix",
 ]

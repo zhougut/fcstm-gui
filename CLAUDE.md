@@ -76,6 +76,18 @@ always expose the same contract.
   that text is shortened and distinct while checking the full value via tooltip.
 - Do not assume checkout line endings. Assertions about unchanged text should use
   the loaded pre-operation source as their baseline.
+- PyQt signal-slot exceptions can abort or wedge the test process instead of
+  becoming ordinary pytest failures. Exercise slots with production-shaped DTOs;
+  recursively convert read-only mappings before JSON serialization.
+- Preserve diagnostic source kind at the validation boundary. Validation state
+  alone cannot distinguish loader/model failures from error-severity inspect
+  findings, and navigation must gate both revision and dependency fingerprint.
+- Field-level action checks must use the current document's real variable
+  declarations. Do not invent declarations for every identifier merely to make
+  a minimal wrapper load; full-document save validation remains authoritative.
+- Treat artifact-service timeouts as infrastructure failures only after the log
+  proves tests and local packaging passed. Re-run and still inspect the complete
+  replacement matrix rather than weakening artifact upload checks.
 
 ## Required Local Evidence
 

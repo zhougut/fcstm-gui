@@ -1,5 +1,5 @@
 from dataclasses import dataclass, replace
-from typing import Dict, List, Optional
+from typing import Optional
 
 from app.application.document import (
     DocumentService,
@@ -30,6 +30,7 @@ def _restore_and_validate(
 ) -> DocumentSession:
     preserve_stale = current.validation_state is ValidationState.STALE_DEPENDENCY
     stale_diagnostics = current.current_diagnostics
+    stale_diagnostic_source_kind = current.diagnostic_source_kind
     # A command may be textually idempotent.  Even then, traversing history
     # must issue a fresh revision so an asynchronous result stamped before
     # the traversal can never match the restored state by accident.
@@ -47,6 +48,7 @@ def _restore_and_validate(
             validation_state=ValidationState.STALE_DEPENDENCY,
             validated_revision=None,
             current_diagnostics=stale_diagnostics,
+            diagnostic_source_kind=stale_diagnostic_source_kind,
         )
     return restored
 

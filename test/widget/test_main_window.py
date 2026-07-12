@@ -2106,3 +2106,31 @@ state TrafficLight {
             window.action_code_gen,
         ):
             assert action.receivers(action.triggered) >= 1
+
+    def test_invalid_document_populates_diagnostics_and_locates_source(
+        self, qtbot, window, tmp_path
+    ):
+        source = tmp_path / "invalid.fcstm"
+        source.write_text("state Root { state ; }", encoding="utf-8")
+        session = window.document_service.load(source)
+
+        window._set_active_document_session(session)
+
+        assert session.validation_state is ValidationState.INVALID_SYNTAX
+        assert window.workspace_tabs.isTabEnabled(
+            window.workspace_tabs.indexOf(window.diagnostics_workspace)
+        )
+        assert window.stackedWidget_state_machine.currentWidget() is (
+            window.page_state_machine_detail
+        )
+        assert window.diagnostics_panel.table.rowCount() >= 1
+        locate = window.diagnostics_panel.table.cellWidget(
+            0, window.diagnostics_panel.COLUMN_ACTION
+        )
+        assert locate.isEnabled()
+        window.show()
+        window.activateWindow()
+        qtbot.mouseClick(locate, QtCore.Qt.LeftButton)
+        QtWidgets.QApplication.processEvents()
+        assert window.workspace_tabs.currentWidget() is window.source_workspace
+        assert window.source_editor.textCursor().hasSelection()

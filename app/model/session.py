@@ -64,6 +64,7 @@ class DocumentSession:
     validated_revision: Optional[int] = None
     last_valid_snapshot: Optional[ValidSnapshot] = None
     current_diagnostics: Tuple[Any, ...] = ()
+    diagnostic_source_kind: Optional[str] = None
     task_ids: Tuple[str, ...] = ()
     encoding_hints: Tuple[Tuple[str, str], ...] = ()
 
@@ -143,6 +144,7 @@ class DocumentSession:
             validation_state=validation_state,
             validated_revision=None,
             current_diagnostics=tuple(diagnostics),
+            diagnostic_source_kind=None,
         )
 
     def with_validation(
@@ -150,6 +152,7 @@ class DocumentSession:
         state: ValidationState,
         diagnostics: Tuple[Any, ...],
         snapshot: Optional[ValidSnapshot],
+        diagnostic_source_kind: Optional[str] = None,
     ) -> "DocumentSession":
         is_valid = state in {
             ValidationState.VALID,
@@ -165,6 +168,7 @@ class DocumentSession:
             validated_revision=self.source_revision if is_valid else None,
             last_valid_snapshot=snapshot if is_valid else self.last_valid_snapshot,
             current_diagnostics=tuple(diagnostics),
+            diagnostic_source_kind=diagnostic_source_kind,
         )
 
     def mark_saved(self) -> "DocumentSession":
@@ -189,4 +193,5 @@ class DocumentSession:
             validation_state=ValidationState.STALE_DEPENDENCY,
             validated_revision=None,
             current_diagnostics=(diagnostic,),
+            diagnostic_source_kind="model",
         )

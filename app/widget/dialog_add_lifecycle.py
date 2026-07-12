@@ -4,6 +4,9 @@ from PyQt5.QtCore import Qt
 
 from ..ui import UIDialogAddLifecycle
 from ..model import StateManager, State
+from .formula_editor import FormulaEditor
+from ..application.formulas import FormulaKind
+from app.utils.dsl_to_ui import extract_variable_definitions
 
 class DialogAddLifecycle(QDialog, UIDialogAddLifecycle):
     def __init__(self, parent, state_manager: StateManager, current_state: State,
@@ -11,7 +14,7 @@ class DialogAddLifecycle(QDialog, UIDialogAddLifecycle):
                  lifecycle_index: int = -1, mutate_model: bool = True):
         QDialog.__init__(self, parent)
         self.setupUi(self)
-        self.setFixedSize(self.width(), self.height())
+        self.setMinimumSize(self.size())
 
         self.state_manager = state_manager
         self.current_state = current_state
@@ -30,11 +33,36 @@ class DialogAddLifecycle(QDialog, UIDialogAddLifecycle):
         self._init_abstract_logic()
 
     def _init_ui(self):
+        self.lifecycle_formula_editor = self._wrap_formula_field(self.edit_op)
         if self.is_edit:
             self.setWindowTitle("修改生命周期操作")
             self._populate_edit_data()
         else:
             self.setWindowTitle("添加生命周期操作")
+
+    def _wrap_formula_field(self, field):
+        self.gridLayout.removeWidget(field)
+        editor = FormulaEditor(
+            field,
+            FormulaKind.LIFECYCLE,
+            revision_provider=self._source_revision,
+            variable_definitions_provider=self._variable_definitions,
+            parent=self.frame,
+        )
+        self.gridLayout.addWidget(editor, 3, 1)
+        return editor
+
+    def _source_revision(self):
+        session = getattr(self.parent(), "document_session", None)
+        return session.source_revision if session is not None else 0
+
+    def _variable_definitions(self):
+        session = getattr(self.parent(), "document_session", None)
+        return (
+            extract_variable_definitions(session.source_text)
+            if session is not None
+            else None
+        )
 
     def _populate_edit_data(self):
         """填充编辑数据到界面控件"""
@@ -109,6 +137,11 @@ class DialogAddLifecycle(QDialog, UIDialogAddLifecycle):
             is_abstract = is_abstract_text == "是"
             operation = self.edit_op.toPlainText().strip()
             comment = self.edit_annotation.toPlainText().strip()
+
+            if not is_abstract and not self.lifecycle_formula_editor.validate_now():
+                QtWidgets.QMessageBox.warning(self, "操作无效", "请修正生命周期动作后再提交。")
+                self.edit_op.setFocus()
+                return
 
             # 验证输入
             if not lifecycle_type:
