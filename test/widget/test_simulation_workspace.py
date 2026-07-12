@@ -78,6 +78,7 @@ def test_simulation_controls_do_not_overlap(qtbot):
         panel.reset_button,
         panel.cancel_button,
     )
+    assert all(control.width() == 88 for control in controls)
     for left, right in zip(controls, controls[1:]):
         intersection = left.geometry().intersected(right.geometry())
         assert intersection.width() <= 1 or intersection.height() <= 1, (

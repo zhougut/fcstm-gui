@@ -223,6 +223,10 @@ always expose the same contract.
   buttons have fixed widths. Separate graph and simulation toolbar controls
   with explicit fixed spacer items; shrinking buttons alone can preserve or
   worsen their geometric overlap.
+- `minimumWidth` is insufficient for Cocoa toolbar buttons: the layout item can
+  retain a narrower native size hint while the widget paints at the minimum,
+  producing overlap despite a spacer. Use a reviewed fixed width so layout item
+  allocation, widget geometry, and the explicit spacer agree.
 - After a native dialog closes on macOS, `activateWindow()` is asynchronous.
   Keyboard acceptance must raise the product window and wait for actual active
   window plus focus state before sending the standard `Cmd` shortcut, then wait

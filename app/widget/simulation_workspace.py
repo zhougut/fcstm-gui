@@ -118,7 +118,7 @@ class SimulationWorkspace(QtWidgets.QWidget):
         button.setObjectName(name)
         button.setAccessibleName(text)
         button.setToolTip(text)
-        button.setMinimumWidth(88)
+        button.setFixedWidth(88)
         return button
 
     def _connect_signals(self):
