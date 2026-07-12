@@ -518,7 +518,8 @@ def test_raw_path_persistence_requires_explicit_opt_in(tmp_path):
     restored = TaskCenter(data_location_provider=lambda: str(tmp_path / "data"))
     restored.load()
 
-    assert str(artifact) in center.history_path.read_text(encoding="utf-8")
+    payload = json.loads(center.history_path.read_text(encoding="utf-8"))
+    assert payload["records"][0]["artifacts"][0]["path"] == str(artifact)
     assert restored.records[0].artifacts[0].raw_path_available is True
 
 
@@ -531,7 +532,8 @@ def test_copy_payload_is_redacted_unless_raw_paths_are_explicitly_requested(tmp_
     )
 
     assert str(workspace) not in center.copy_payload(record)
-    assert str(workspace) in center.copy_payload(record, include_raw_paths=True)
+    payload = json.loads(center.copy_payload(record, include_raw_paths=True))
+    assert payload["summary"] == "created {}".format(workspace / "out.txt")
 
 
 def test_history_uses_versioned_json_and_injected_data_location(tmp_path):

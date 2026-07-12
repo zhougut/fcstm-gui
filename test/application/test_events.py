@@ -9,6 +9,7 @@ from app.application.events import (
     EventReadOnlyError,
     InvalidEventNameError,
 )
+from app.source import SourceDocument
 
 
 def _load(tmp_path, source, name="root.fcstm"):
@@ -466,7 +467,7 @@ def test_imported_event_is_projected_with_display_and_use_provenance_but_read_on
     assert event.display_name == "Child Go"
     assert event.resolved_path == ("Root", "First", "Go")
     assert not event.editable
-    assert event.source_uri == child.resolve().as_uri()
+    assert event.source_uri == SourceDocument.from_file(child).uri
     assert len(event.use_refs) == 1
     assert not event.use_refs[0].editable
 

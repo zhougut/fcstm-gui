@@ -274,7 +274,8 @@ def test_imported_event_refs_are_physical_read_only_with_projection_provenance(
 
     assert {index.text_for_ref(ref) for ref in imported_refs} == {"Go"}
     assert all(ref.read_only for ref in imported_refs)
-    assert all(ref.source_uri == child.resolve().as_uri() for ref in imported_refs)
+    child_uri = SourceDocument.from_file(child).uri
+    assert all(ref.source_uri == child_uri for ref in imported_refs)
     for ref in imported_refs:
         projections = index.projections_for_ref(ref)
         assert {projection.alias_chain for projection in projections} == {
@@ -391,6 +392,9 @@ def test_source_document_preserves_encoding_and_qt_offsets(tmp_path):
     assert document.python_to_qt_offset(emoji_offset + 1) == emoji_offset + 2
     assert document.qt_to_python_offset(emoji_offset + 2) == emoji_offset + 1
     root_offset = text.index("Root")
+    root_qt_offset = document.python_to_qt_offset(root_offset)
+    assert root_qt_offset == len(text[:root_offset].encode("utf-16-le")) // 2 - 1
+    assert document.qt_to_python_offset(root_qt_offset) == root_offset
     assert document.offset_to_line_column(root_offset) == (2, 7)
 
 

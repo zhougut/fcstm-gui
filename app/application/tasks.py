@@ -237,6 +237,11 @@ class PathRedactor:
                     result,
                     flags=re.IGNORECASE,
                 )
+        result = re.sub(
+            r"(<(?:WORKSPACE|TEMP|HOME)>)([\\/][^\s\"'<>]*)",
+            lambda match: match.group(1) + match.group(2).replace("\\", "/"),
+            result,
+        )
         return result
 
     def redact(self, value):

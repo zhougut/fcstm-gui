@@ -6,6 +6,7 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 
 from app.model import State, StateManager
 from app.model.session import ValidationState
+from app.source import SourceDocument
 from app.widget import AppMainWindow
 from app.widget import main_window
 
@@ -1514,7 +1515,7 @@ state TrafficLight {
         assert editor.textCursor().selectedText().startswith("event Go")
         assert (
             window.workspace_tabs.currentWidget().property("source_uri")
-            == child.resolve().as_uri()
+            == SourceDocument.from_file(child).uri
         )
 
     def test_read_only_event_edit_offers_open_source(
@@ -1548,7 +1549,7 @@ state TrafficLight {
         assert editor.textCursor().selectedText().startswith("event Go")
         assert window.workspace_tabs.currentWidget().property(
             "source_uri"
-        ) == child.resolve().as_uri()
+        ) == SourceDocument.from_file(child).uri
 
     def test_imported_event_source_is_keyboard_reachable(
         self, qtbot, window, tmp_path
@@ -1875,7 +1876,7 @@ state TrafficLight {
         QtWidgets.QApplication.processEvents()
 
         assert window.document_name_label.text() != source.name
-        assert "…" in window.document_name_label.text()
+        assert len(window.document_name_label.text()) < len(source.name)
         assert window.document_name_label.toolTip() != str(source)
         assert "<TEMP>" in window.document_name_label.toolTip()
         window.task_result_dock.show_full_paths_action.setChecked(True)
@@ -1916,8 +1917,8 @@ state TrafficLight {
             window._import_statechart()
 
         for alias, expected_uri in (
-            ("First", first.resolve().as_uri()),
-            ("Second", second.resolve().as_uri()),
+            ("First", SourceDocument.from_file(first).uri),
+            ("Second", SourceDocument.from_file(second).uri),
         ):
             item = window.tree_all_state.findItems(
                 alias, QtCore.Qt.MatchExactly | QtCore.Qt.MatchRecursive

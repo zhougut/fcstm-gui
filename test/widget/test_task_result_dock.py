@@ -1,6 +1,7 @@
 import json
 import re
 from dataclasses import replace
+from pathlib import Path
 
 from PyQt5 import QtCore, QtGui, QtWidgets
 
@@ -346,7 +347,10 @@ def test_artifact_actions_open_existing_raw_file_and_directory(
     qtbot.mouseClick(dock.open_artifact_button, QtCore.Qt.LeftButton)
     qtbot.mouseClick(dock.open_artifact_directory_button, QtCore.Qt.LeftButton)
 
-    assert opened == [str(artifact_file), str(artifact_file.parent)]
+    assert [Path(item).resolve() for item in opened] == [
+        artifact_file.resolve(),
+        artifact_file.parent.resolve(),
+    ]
 
 
 def test_redacted_restored_artifact_has_no_open_action(qtbot, tmp_path):
@@ -415,7 +419,8 @@ def test_full_path_display_requires_explicit_opt_in_and_persists_setting(
     assert str(workspace) in dock.detail.toPlainText()
     assert str(workspace) in dock.artifact_list.item(0).text()
     qtbot.mouseClick(dock.copy_button, QtCore.Qt.LeftButton)
-    assert str(workspace) in QtWidgets.QApplication.clipboard().text()
+    copied = json.loads(QtWidgets.QApplication.clipboard().text())
+    assert copied["summary"] == "created {}".format(artifact)
     output = tmp_path / "full-path.json"
     monkeypatch.setattr(
         QtWidgets.QFileDialog,
@@ -423,7 +428,8 @@ def test_full_path_display_requires_explicit_opt_in_and_persists_setting(
         lambda *args, **kwargs: (str(output), "JSON Files (*.json)"),
     )
     assert dock.export_selected()
-    assert str(workspace) in output.read_text(encoding="utf-8")
+    exported = json.loads(output.read_text(encoding="utf-8"))
+    assert exported["summary"] == "created {}".format(artifact)
 
     restored_dock = TaskResultDock(center, settings=settings)
     qtbot.addWidget(restored_dock)

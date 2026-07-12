@@ -181,19 +181,44 @@ class SourceDocument:
     def python_to_qt_offset(self, offset: int) -> int:
         if offset < 0 or offset > len(self.text):
             raise ValueError("source offset is outside the document")
-        return len(self.text[:offset].encode("utf-16-le")) // 2
+        qt_offset = 0
+        python_offset = 0
+        while python_offset < offset:
+            char = self.text[python_offset]
+            if (
+                char == "\r"
+                and python_offset + 1 < len(self.text)
+                and self.text[python_offset + 1] == "\n"
+            ):
+                qt_offset += 1
+                python_offset += 2
+                continue
+            qt_offset += 2 if ord(char) > 0xFFFF else 1
+            python_offset += 1
+        return qt_offset
 
     def qt_to_python_offset(self, offset: int) -> int:
         if offset < 0:
             raise ValueError("Qt offset is outside the document")
         qt_offset = 0
-        for python_offset, char in enumerate(self.text):
+        python_offset = 0
+        while python_offset < len(self.text):
             if qt_offset == offset:
                 return python_offset
+            char = self.text[python_offset]
+            if (
+                char == "\r"
+                and python_offset + 1 < len(self.text)
+                and self.text[python_offset + 1] == "\n"
+            ):
+                qt_offset += 1
+                python_offset += 2
+                continue
             width = 2 if ord(char) > 0xFFFF else 1
             if qt_offset < offset < qt_offset + width:
                 raise ValueError("Qt offset splits a UTF-16 surrogate pair")
             qt_offset += width
+            python_offset += 1
         if qt_offset == offset:
             return len(self.text)
         raise ValueError("Qt offset is outside the document")

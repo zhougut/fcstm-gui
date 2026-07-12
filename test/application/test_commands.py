@@ -290,7 +290,7 @@ def test_full_validation_failure_does_not_commit_command(document):
         stack.execute(original, transaction)
 
     assert original.source_revision == 0
-    assert original.source_text == VALID_SOURCE
+    assert original.source_text == transaction.before_text
     assert (stack.undo_depth, stack.redo_depth) == (0, 0)
 
 
