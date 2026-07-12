@@ -125,8 +125,12 @@ def test_missing_and_circular_imports_are_explicit(tmp_path):
         'state Root { import "./does-not-exist.fcstm" as Missing; }',
         encoding="utf-8",
     )
-    with pytest.raises(SourceImportNotFoundError, match="does-not-exist.fcstm"):
+    with pytest.raises(
+        SourceImportNotFoundError, match="does-not-exist.fcstm"
+    ) as error:
         build_source_index(missing)
+    assert error.value.path == str((tmp_path / "does-not-exist.fcstm").resolve())
+    assert error.value.operation == "read"
 
     first = tmp_path / "first.fcstm"
     second = tmp_path / "second.fcstm"

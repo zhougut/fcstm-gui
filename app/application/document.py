@@ -52,6 +52,20 @@ class DocumentDependencyStaleError(DocumentError):
         self.session = session
 
 
+class DocumentDependencyLoadError(DocumentError):
+    def __init__(self, session: DocumentSession):
+        self.session = session
+        self.diagnostics = tuple(session.current_diagnostics)
+        first = self.diagnostics[0] if self.diagnostics else None
+        self.path = getattr(first, "path", None)
+        self.operation = getattr(first, "operation", None)
+        super().__init__(
+            "source dependency could not be loaded{}".format(
+                ": {}".format(self.path) if self.path else ""
+            )
+        )
+
+
 class DocumentValidationError(DocumentError):
     def __init__(self, candidate: DocumentSession):
         super().__init__(

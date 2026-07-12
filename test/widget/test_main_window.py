@@ -496,6 +496,122 @@ state TrafficLight {
         assert window.document_session is current
         assert window.document_session.path == str(first.resolve())
 
+    @pytest.mark.parametrize(
+        "reply,expected_text,accepted",
+        [
+            (QtWidgets.QMessageBox.Save, "state Changed;", True),
+            (QtWidgets.QMessageBox.Discard, "state Original;", True),
+            (QtWidgets.QMessageBox.Cancel, "state Original;", False),
+        ],
+    )
+    def test_visible_dirty_close_save_discard_cancel(
+        self,
+        monkeypatch,
+        qtbot,
+        window,
+        tmp_path,
+        reply,
+        expected_text,
+        accepted,
+    ):
+        source = tmp_path / "dirty.fcstm"
+        source.write_text("state Original;", encoding="utf-8")
+        session = window.document_service.load(source)
+        dirty = window.document_service.replace_source_text(
+            session, "state Changed;"
+        )
+        window._set_active_document_session(dirty)
+        window.show()
+        QtWidgets.QApplication.processEvents()
+        assert window.isVisible()
+        monkeypatch.setattr(
+            QtWidgets.QMessageBox,
+            "question",
+            lambda *args, **kwargs: reply,
+        )
+        closed = window.close()
+        QtWidgets.QApplication.processEvents()
+
+        assert closed is accepted
+        assert window.isVisible() is (not accepted)
+        assert source.read_text(encoding="utf-8") == expected_text
+        if not accepted:
+            assert window.document_session is dirty
+            window.hide()
+
+    def test_invalid_source_save_rejection_blocks_real_window_close(
+        self, monkeypatch, window, tmp_path
+    ):
+        source = tmp_path / "invalid.fcstm"
+        source.write_text("state Original;", encoding="utf-8")
+        session = window.document_service.load(source)
+        invalid = window.document_service.replace_source_text(
+            session, "state Broken {"
+        )
+        window._set_active_document_session(invalid)
+        window.show()
+        QtWidgets.QApplication.processEvents()
+
+        def answer(parent, title, *args, **kwargs):
+            if title == "未保存的修改":
+                return QtWidgets.QMessageBox.Save
+            if title == "保存无效源码":
+                return QtWidgets.QMessageBox.No
+            raise AssertionError("unexpected question: {}".format(title))
+
+        monkeypatch.setattr(QtWidgets.QMessageBox, "question", answer)
+
+        assert not window.close()
+        QtWidgets.QApplication.processEvents()
+        assert window.isVisible()
+        assert source.read_text(encoding="utf-8") == "state Original;"
+        assert window.document_session is invalid
+        window.hide()
+
+    def test_missing_import_preserves_previous_document(
+        self, monkeypatch, qtbot, window, tmp_path
+    ):
+        current_path = tmp_path / "current.fcstm"
+        broken_path = tmp_path / "broken.fcstm"
+        current_path.write_text("state Current;", encoding="utf-8")
+        broken_path.write_text(
+            'state Broken { import "./missing.fcstm" as Missing; }',
+            encoding="utf-8",
+        )
+        current = window.document_service.load(current_path)
+        window._set_active_document_session(current)
+        monkeypatch.setattr(
+            QtWidgets.QFileDialog,
+            "getOpenFileName",
+            lambda *args, **kwargs: (
+                str(broken_path),
+                "fcstm Files (*.fcstm)",
+            ),
+        )
+        errors = []
+        monkeypatch.setattr(
+            QtWidgets.QMessageBox,
+            "critical",
+            lambda *args, **kwargs: errors.append(args),
+        )
+
+        operation = window._import_statechart()
+        qtbot.waitUntil(lambda: operation.result is not None, timeout=3000)
+
+        assert operation.result.status is main_window.TaskStatus.FAILED
+        assert window.document_session is current
+        assert window.state_manager.root_state.name == "Current"
+        assert window.source_editor.toPlainText() == "state Current;"
+        assert errors and errors[0][1] == "依赖加载失败"
+        assert isinstance(
+            operation.result.error,
+            main_window.DocumentDependencyLoadError,
+        )
+        assert operation.result.error.path == str(
+            (tmp_path / "missing.fcstm").resolve()
+        )
+        assert operation.result.error.operation == "read"
+
     def test_loaded_document_validation_and_dsl_export_use_source_authority(
         self, monkeypatch, qtbot, window, tmp_path
     ):
@@ -690,6 +806,63 @@ state TrafficLight {
         )
         assert window.document_session is before
         assert warnings
+
+    def test_invalid_form_candidate_leaves_session_and_projection_unchanged(
+        self, monkeypatch, window, tmp_path
+    ):
+        source = tmp_path / "form.fcstm"
+        source.write_text(
+            "state Root { state A; [*] -> A; A -> [*]; }",
+            encoding="utf-8",
+        )
+        session = window.document_service.load(source)
+        window._set_active_document_session(session)
+        before_session = window.document_session
+        before_manager = window.state_manager
+        state_a = before_manager.get_state_by_path("Root.A")
+        warnings = []
+        monkeypatch.setattr(
+            QtWidgets.QMessageBox,
+            "warning",
+            lambda *args, **kwargs: warnings.append(args),
+        )
+
+        changed = window._replace_projected_declaration(
+            {"source_ref": state_a.source_ref}, "state ;"
+        )
+
+        assert not changed
+        assert window.document_session is before_session
+        assert window.state_manager is before_manager
+        assert window.source_editor.toPlainText() == before_session.source_text
+        assert warnings and warnings[0][1] == "编辑未应用"
+
+    def test_composite_state_rename_is_source_editor_only_and_non_mutating(
+        self, monkeypatch, window, tmp_path
+    ):
+        source = tmp_path / "composite.fcstm"
+        source.write_text(
+            "state Root { state Group { state A; [*] -> A; A -> [*]; } "
+            "[*] -> Group; Group -> [*]; }",
+            encoding="utf-8",
+        )
+        session = window.document_service.load(source)
+        window._set_active_document_session(session)
+        group = window.state_manager.get_state_by_path("Root.Group")
+        warnings = []
+        monkeypatch.setattr(
+            QtWidgets.QMessageBox,
+            "warning",
+            lambda *args, **kwargs: warnings.append(args),
+        )
+
+        changed = window._rename_projected_state(group, "Renamed")
+
+        assert not changed
+        assert window.document_session is session
+        assert "state Group" in window.document_session.source_text
+        assert "Renamed" not in window.document_session.source_text
+        assert warnings and warnings[0][1] == "暂不支持"
 
     def test_add_button_creates_root_then_child_without_blocking_dialog(
         self, monkeypatch, qtbot, window

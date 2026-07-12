@@ -14,6 +14,7 @@ from pyfcstm.dsl import parse_with_grammar_entry
 from app.ui import UIMainWindow
 from ..model import State, StateManager
 from app.application.document import (
+    DocumentDependencyLoadError,
     DocumentDependencyStaleError,
     DocumentService,
     DocumentValidationError,
@@ -879,6 +880,21 @@ class AppMainWindow(QMainWindow, UIMainWindow):
                         )
                         return
                     logical_status = TaskStatus.CANCELLED
+                    return
+                if session.validation_state is ValidationState.STALE_DEPENDENCY:
+                    logical_status = TaskStatus.FAILED
+                    ui_error = DocumentDependencyLoadError(session)
+                    detail = "\n".join(
+                        str(item) for item in session.current_diagnostics
+                    )
+                    QtWidgets.QMessageBox.critical(
+                        self,
+                        "依赖加载失败",
+                        "源码依赖无法读取，当前文档保持不变：\n{}".format(
+                            detail
+                        ),
+                        QtWidgets.QMessageBox.Ok,
+                    )
                     return
                 self._set_active_document_session(session)
                 detail = "\n".join(str(item) for item in session.current_diagnostics)

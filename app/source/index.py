@@ -953,7 +953,9 @@ class _SourceIndexBuilder:
         path_key = os.path.normcase(str(resolved))
         if not resolved.is_file() and path_key not in self.snapshot.raw_by_path:
             raise SourceImportNotFoundError(
-                "import source file does not exist: {}".format(resolved)
+                "import source file does not exist: {}".format(resolved),
+                path=str(resolved),
+                operation="read",
             )
         document = self._read_document(resolved)
         if document.document_id in stack:
@@ -982,7 +984,9 @@ class _SourceIndexBuilder:
                 raise SourceImportNotFoundError(
                     "import {!r} from {} does not exist: {}".format(
                         directive.source_path, document.path, resolved_target
-                    )
+                    ),
+                    path=str(resolved_target),
+                    operation="read",
                 )
             target = self._read_document(resolved_target)
             if target.document_id in next_stack:
@@ -1104,7 +1108,9 @@ def _capture_snapshot(
                 raise SourceImportNotFoundError(
                     "import {!r} from {} does not exist: {}".format(
                         directive.source_path, document.path, resolved_target
-                    )
+                    ),
+                    path=str(resolved_target),
+                    operation="read",
                 )
             visit(resolved_target, next_stack)
 
