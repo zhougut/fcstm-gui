@@ -191,6 +191,7 @@ def test_fast_workflow_is_the_short_windows_linux_gate():
     assert "executable: fcstm-gui" in workflow
     assert "executable: fcstm-gui.exe" in workflow
     assert 'echo "$MINGW_BIN" >> "$GITHUB_PATH"' not in workflow
+    assert "open(path, encoding='utf-8')" in workflow
 
     fresh = workflow.split("  fresh:\n", 1)[1]
     assert "actions/download-artifact@v8" in fresh

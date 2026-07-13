@@ -144,7 +144,8 @@ jobs:
               ('fast-evidence/self-check.json', 182, 'passed'),
               ('fast-evidence/acceptance.json', 140, 'passed'),
           ):
-              report = json.load(open(path))
+              with open(path, encoding='utf-8') as stream:
+                  report = json.load(stream)
               if report.get('status') != 'passed' or report.get('counts', {}).get(key) != expected:
                   raise SystemExit('{} did not pass: {}'.format(path, report.get('counts')))
           print('fast evidence: self-check=182/182 acceptance=140/140')
