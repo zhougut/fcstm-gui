@@ -279,6 +279,7 @@ def test_user_facing_markdown_has_no_missing_local_links_or_images():
         ROOT / "docs" / "使用说明.md",
         ROOT / "docs" / "验收截图索引.md",
         ROOT / "docs" / "images" / "acceptance-140" / "README.md",
+        ROOT / "docs" / "reviews" / "2026-07-13-lineage-reverification.md",
         ROOT / "README.md",
     )
     pattern = re.compile(r"!?(?:\[[^\]]*\])\(([^)]+)\)|<img[^>]+src=[\"']([^\"']+)")

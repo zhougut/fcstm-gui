@@ -41,6 +41,11 @@ The source-reference workflow images remain in `docs/images/workflows/` and are
 explicitly marked `fresh_release_evidence=false`; they are documentation visuals,
 not a substitute for downloaded release evidence.
 
+The historical Full Release evidence and 54-sample visual review were re-run through
+the current verifier using a symlinked extracted root. See
+[`2026-07-13-lineage-reverification.md`](2026-07-13-lineage-reverification.md) for
+the exact command and the explicit old-commit identity boundary.
+
 ## Current gates
 
 - Default push/PR: `.github/workflows/fast-verify.yml`, Windows/Linux only,
