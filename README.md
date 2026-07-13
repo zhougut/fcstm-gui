@@ -4,7 +4,7 @@
 
 ## 发布包使用
 
-从 GitHub Actions 的 `Build & Verify` 下载与系统匹配的产物：
+从 GitHub Actions 的 `Full Release Build & Verify` 下载与系统匹配的产物：
 
 - `fcstm-gui-linux-x86_64` / `-onefile`
 - `fcstm-gui-windows-x86_64` / `-onefile`
@@ -15,6 +15,11 @@ onedir ZIP 解压后运行目录内的 `fcstm-gui`（Windows 为
 PNG/SVG/PDF 渲染需要 Java 11 或兼容 JRE。当前 CI 验证的是 GitHub 托管的
 Linux x86_64、Windows x86_64 和 macOS Intel 环境，不声称已经在 Windows 7
 实机验证。
+
+普通 push/PR 使用 `Fast Verify`，只在 Windows/Linux 原生环境运行真实
+`182/182 self-check`、`140/140 GUI acceptance` 和聚焦回归测试，job 上限十分钟。
+它不是发布包自包含证明；需要新产物或三平台 fresh 证据时，手动运行完整的
+`Full Release Build & Verify` 或推送 `v*` tag。
 
 发布包内置 Noto Sans CJK SC 字体，以保证干净系统上的中文界面可读；字体依据
 SIL Open Font License 1.1 分发，许可证位于 `app/resources/fonts/OFL.txt`。

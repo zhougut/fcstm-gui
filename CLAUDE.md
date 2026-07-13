@@ -73,6 +73,15 @@ always expose the same contract.
 
 ## Build And CI Workflow
 
+- Keep ordinary push/PR feedback below ten minutes with
+  `.github/workflows/fast-verify.yml`: Windows/Linux native GUI only, real
+  `182/182` self-check plus `140/140` acceptance at 1280x720, focused contract
+  tests, and `timeout-minutes: 10`. Use concurrency cancellation so stale docs
+  commits do not queue duplicate runs.
+- Keep the full three-platform onedir/onefile and fresh evidence matrix in
+  `.github/workflows/build.yml`, triggered manually or by a release tag. It is
+  a release-evidence workflow, not the default documentation gate; do not
+  repeatedly run it for non-blocking visual polish.
 - Follow a two-stage matrix for Linux x86_64, Windows x86_64, and macOS x86_64.
 - Stage 1 builds and smoke-tests both onedir and onefile artifacts on each target
   OS, then uploads both artifacts.

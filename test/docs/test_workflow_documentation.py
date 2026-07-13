@@ -10,6 +10,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 GUIDE = ROOT / "docs" / "完整操作验收手册.md"
 BUILD_WORKFLOW = ROOT / ".github" / "workflows" / "build.yml"
+FAST_WORKFLOW = ROOT / ".github" / "workflows" / "fast-verify.yml"
 IMAGE_ROOT = ROOT / "docs" / "images" / "workflows"
 MANIFEST = IMAGE_ROOT / "manifest.json"
 SCHEMA = ROOT / "docs" / "workflow-images.schema.json"
@@ -167,6 +168,18 @@ def test_build_workflow_keeps_fresh_products_independent_of_host_toolchains():
         "- name: M7 application service branch coverage gate", 1
     )[1].split("- name: Generate, compile, and execute all five templates", 1)[0]
     assert 'export PATH="$PATH:$MINGW_BIN"' in coverage_step
+
+
+def test_fast_workflow_is_the_short_windows_linux_gate():
+    workflow = FAST_WORKFLOW.read_text(encoding="utf-8")
+    assert "timeout-minutes: 10" in workflow
+    assert "cancel-in-progress: true" in workflow
+    assert "label: linux-x86_64" in workflow
+    assert "label: windows-x86_64" in workflow
+    assert "main.py --self-check" in workflow
+    assert "main.py --acceptance-check" in workflow
+    assert "182" in workflow and "140" in workflow
+    assert "fcstm-gui-${{ matrix.label }}-fast-evidence" in workflow
 
 
 def test_workflow_manifest_is_source_only_and_manually_reviewed(manifest):
@@ -381,7 +394,9 @@ def test_blind_review_and_geometry_templates_are_complete_but_unclaimed():
     ):
         assert field in guide
     assert "blind-review-1 |" in guide
-    assert "final-fresh | 待独立 reviewer 填写" in guide
+    assert "fast-verify-current |" in guide
+    assert "full-release-baseline |" in guide
+    assert "final-visual-review |" in guide
 
 
 def test_manual_fixture_blocks_execute_production_paths(tmp_path):

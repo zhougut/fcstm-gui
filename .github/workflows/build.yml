@@ -1,16 +1,18 @@
-name: Build & Verify
+name: Full Release Build & Verify
 
 on:
+  # The full three-platform onedir/onefile + fresh matrix is intentionally a
+  # release gate.  It is too large to run on every documentation or small UI
+  # change; use the ten-minute Fast Verify workflow for normal pushes/PRs.
   push:
-    branches:
-      - main
-      - master
-      - 'dev/**'
-      - 'feat/**'
-      - 'fix/**'
-      - 'ci/**'
-  pull_request:
+    tags:
+      - 'v*'
   workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Why the full release matrix is being run'
+        required: false
+        default: 'release evidence or cross-platform packaging change'
 
 permissions:
   contents: read
