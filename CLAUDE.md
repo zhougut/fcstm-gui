@@ -85,6 +85,13 @@ always expose the same contract.
   `.github/workflows/build.yml`, triggered manually or by a release tag. It is
   a release-evidence workflow, not the default documentation gate; do not
   repeatedly run it for non-blocking visual polish.
+- Reuse a historical Full Release product/evidence lineage for documentation-only
+  descendants only after proving that `app/`, the entry points/spec, requirements,
+  `Makefile`, and other packaging inputs are byte-identical to the accepted product
+  tree. Record both the historical product SHA/run and the current docs SHA, label
+  the result `PASS-LINEAGE-ATTESTED`, and never relabel the old artifact as a
+  current-SHA fresh build. Any product, dependency, or packaging change invalidates
+  the reuse and requires one new Full Release matrix.
 - Follow a two-stage matrix for Linux x86_64, Windows x86_64, and macOS x86_64.
 - Stage 1 builds and smoke-tests both onedir and onefile artifacts on each target
   OS, then uploads both artifacts.
