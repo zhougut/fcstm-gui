@@ -105,9 +105,10 @@ always expose the same contract.
 - Windows Cairo DLLs are supplied by the MSYS2 MinGW runtime during source and
   PyInstaller steps. Writing `MINGW_BIN` to `GITHUB_ENV` does not export a shell
   variable into later independent Actions steps; every Windows step that loads
-  Cairo must explicitly append `MINGW_BIN` to `PATH` (and the setup step should
-  also write it to `GITHUB_PATH`). A source-only green run is insufficient when
-  a later self-check step cannot resolve `libcairo-2.dll`.
+  Cairo must explicitly append `MINGW_BIN` to `PATH`. Do not write that directory
+  to `GITHUB_PATH`: it can shadow setup-python's native `python.exe` with the
+  MSYS2 shim, which has no pip module. A source-only green run is insufficient
+  when a later self-check step cannot resolve `libcairo-2.dll`.
 - Every Windows step that imports CairoSVG, including isolated coverage gates,
   must append the MSYS2 MinGW runtime directory to PATH. Environment changes
   inside one GitHub Actions shell step do not carry into the next step.

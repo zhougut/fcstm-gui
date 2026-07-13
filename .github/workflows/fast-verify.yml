@@ -37,9 +37,11 @@ jobs:
         include:
           - os: ubuntu-22.04
             label: linux-x86_64
+            executable: fcstm-gui
             qt_platform: xcb
           - os: windows-2022
             label: windows-x86_64
+            executable: fcstm-gui.exe
             qt_platform: windows
     runs-on: ${{ matrix.os }}
     steps:
@@ -73,9 +75,9 @@ jobs:
         run: |
           MINGW_BIN="$(cygpath -u '${{ steps.msys2.outputs.msys2-location }}\mingw64\bin')"
           echo "MINGW_BIN=$MINGW_BIN" >> "$GITHUB_ENV"
-          # GITHUB_ENV is step-scoped for shell variables; GITHUB_PATH keeps
-          # the DLL directory visible to every later Windows step as well.
-          echo "$MINGW_BIN" >> "$GITHUB_PATH"
+          # Keep the MinGW directory explicit in each bash step. Putting it in
+          # GITHUB_PATH would shadow setup-python's native python.exe with the
+          # MSYS2 shim, which has no pip module.
 
       - name: Set Windows native GUI resolution
         if: runner.os == 'Windows'

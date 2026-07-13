@@ -188,6 +188,9 @@ def test_fast_workflow_is_the_short_windows_linux_gate():
     assert "FCSTM_GUI_BUILD_MODE: onefile" in workflow
     assert "fcstm-gui-${{ matrix.label }}-fast-product" in workflow
     assert "fcstm-gui-${{ matrix.label }}-fast-fresh-evidence" in workflow
+    assert "executable: fcstm-gui" in workflow
+    assert "executable: fcstm-gui.exe" in workflow
+    assert 'echo "$MINGW_BIN" >> "$GITHUB_PATH"' not in workflow
 
     fresh = workflow.split("  fresh:\n", 1)[1]
     assert "actions/download-artifact@v8" in fresh
