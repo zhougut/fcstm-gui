@@ -21,12 +21,13 @@ for d in "$root"/*-evidence; do
     --artifact-root "$d"
 done
 venv/bin/python scripts/verify_evidence_contract.py \
-  --visual-review /tmp/fcstm-gui-visual-root/visual-review.json \
+  --visual-review docs/reviews/2026-07-13-visual-attestation.json \
   --visual-root /tmp/fcstm-visual-lineage-root
 ```
 
 Observed result: all six evidence contracts passed, and the visual review passed
-all `54/54` samples with `blocking_findings=[]`. The visual review has two recorded
+all `54/54` samples with `blocking_findings=[]`. The attestation is now persisted at
+`docs/reviews/2026-07-13-visual-attestation.json` rather than only in `/tmp`. It has two recorded
 non-blocking Cocoa boundary-contact findings; every required functional verdict is
 true. The temporary visual root uses symlinks into the extracted run and does not
 copy or alter the products.
