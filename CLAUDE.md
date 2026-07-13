@@ -97,6 +97,11 @@ always expose the same contract.
   job does not compensate for a skipped or failed fresh-runner verification job.
 - After each CI fix, push the smallest coherent commit and watch the replacement
   run through all six matrix jobs. Iterate until all are green.
+- The outer full-suite timeout must accommodate the slowest native runner:
+  macOS can exceed six minutes for the 140-item GUI acceptance test. Keep
+  per-operation GUI waits bounded (currently 20 seconds) and use a 600-second
+  pytest process budget; do not interpret a 300-second process timeout as a
+  product failure.
 
 ## Cross-Platform Lessons
 
