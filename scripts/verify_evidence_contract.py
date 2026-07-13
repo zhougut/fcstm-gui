@@ -246,6 +246,14 @@ VISUAL_REVIEW_ITEM_FIELDS = frozenset(
         "notes",
     }
 )
+VISUAL_REVIEW_SAMPLE_ITEMS = frozenset(
+    {
+        "geometry.active-workspaces",
+        "graph.refresh",
+        "simulation.initialize",
+        "dynamic.case.design_evented_pseudo_chain_invalid_then_valid",
+    }
+)
 NON_BLOCKING_FINDING_FIELDS = frozenset(
     {"id", "join_key", "category", "description", "impairs_use", "evidence_path"}
 )
@@ -541,7 +549,7 @@ def verify_visual_review_attestation(attestation_path, artifact_root):
         seen_items.add(expected_key)
         combination = (platform_system, layout)
         combination_counts[combination] = combination_counts.get(combination, 0) + 1
-        _require(item.get("acceptance_item") == "geometry.active-workspaces", label + " bad acceptance item")
+        _require(item.get("acceptance_item") in VISUAL_REVIEW_SAMPLE_ITEMS, label + " bad acceptance item")
         _require(item.get("status") == "passed", label + " did not pass")
         _require(
             all(item.get(key) is True for key in OVERLAP_FUNCTIONAL_VERDICTS),
@@ -582,7 +590,10 @@ def verify_visual_review_attestation(attestation_path, artifact_root):
             record
             for record in report.get("artifacts", [])
             if record.get("sha256") == item.get("image_sha256")
-            and "geometry-" in str(record.get("path") or "")
+            and (
+                item.get("acceptance_item") != "geometry.active-workspaces"
+                or Path(str(record.get("path") or "")).name.startswith("geometry-")
+            )
         ]
         _require(len(screenshot_records) == 1, label + " screenshot/report mismatch")
         report_exemptions = (report.get("geometry") or {}).get("overlap_exemptions") or []

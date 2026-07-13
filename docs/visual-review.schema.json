@@ -72,7 +72,14 @@
           "image_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
           "viewport": {"enum": ["1280x720", "1920x1080"]},
           "scale": {"enum": ["1", "1.5", "2"]},
-          "acceptance_item": {"const": "geometry.active-workspaces"},
+          "acceptance_item": {
+            "enum": [
+              "geometry.active-workspaces",
+              "graph.refresh",
+              "simulation.initialize",
+              "dynamic.case.design_evented_pseudo_chain_invalid_then_valid"
+            ]
+          },
           "overlap_exemption_join_keys": {
             "type": "array",
             "items": {"type": "string", "minLength": 1}

@@ -144,6 +144,15 @@ def test_visual_review_verifier_locks_six_products_and_54_functional_samples(
                     }
                 )
                 item_inputs.append((image, digest))
+            # The real reports also retain the item-140 alias for the final
+            # geometry screenshot.  It must not be mistaken for a second
+            # canonical geometry record by the visual verifier.
+            report_artifacts.append(
+                dict(
+                    report_artifacts[-1],
+                    path="item-140-geometry-active-workspaces.png",
+                )
+            )
             report = {
                 "status": "passed",
                 "viewport": "1280x720",

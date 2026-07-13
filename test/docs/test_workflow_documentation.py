@@ -96,6 +96,11 @@ def test_final_visual_review_schema_is_strict_and_function_blocking():
     items = schema["properties"]["items"]
     assert items["minItems"] == items["maxItems"] == 54
     assert items["items"]["additionalProperties"] is False
+    assert set(items["items"]["properties"]["acceptance_item"]["enum"]) >= {
+        "geometry.active-workspaces",
+        "graph.refresh",
+        "simulation.initialize",
+    }
     assert schema["properties"]["blocking_findings"]["maxItems"] == 0
     required = set(items["items"]["required"])
     assert {
