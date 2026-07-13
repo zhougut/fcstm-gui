@@ -1,6 +1,6 @@
 # Current Main Review: Fast Gate And Documentation
 
-- reviewed commit: `e1e068f`
+- reviewed commit: `3c54c25`
 - reviewer: Codex root (implementation and GUI evidence review)
 - scope: existing Issue #2/#3, current `main`, GUI acceptance contract, workflow
   topology, Chinese operation manual, source-reference screenshots, and the
@@ -42,9 +42,10 @@ explicitly marked `fresh_release_evidence=false`; they are documentation visuals
 not a substitute for downloaded release evidence.
 
 The historical Full Release evidence and 54-sample visual review were re-run through
-the current verifier using a symlinked extracted root. See
-[`2026-07-13-lineage-reverification.md`](2026-07-13-lineage-reverification.md) for
-the exact command and the explicit old-commit identity boundary.
+the current verifier using a symlinked extracted root. The strict attestation is
+persisted at [`2026-07-13-visual-attestation.json`](2026-07-13-visual-attestation.json).
+See [`2026-07-13-lineage-reverification.md`](2026-07-13-lineage-reverification.md)
+for the exact command and the explicit old-commit identity boundary.
 
 ## Current gates
 
@@ -59,8 +60,9 @@ the exact command and the explicit old-commit identity boundary.
 
 ## Residual delivery action
 
-Fast Verify is complete for `main` at `29228970285`, and its status has been
-recorded in Issue #2/#3. The historical baseline and 54-sample visual review remain
-independent evidence boundaries; do not create another issue. A new Full Release
-run is only needed when publishing new binaries or when a serious cross-platform
-failure is discovered.
+Fast Verify is complete for `main` at `29228970285`, and its status plus the
+persisted visual attestation have been recorded in Issue #2/#3. The historical
+baseline remains an explicit product-lineage evidence boundary; do not create
+another issue. A new Full Release run is only needed when publishing new binaries,
+when the core product tree changes, or when a serious cross-platform failure is
+discovered.
