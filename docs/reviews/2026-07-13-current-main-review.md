@@ -12,7 +12,7 @@
 ### Blocking
 
 None found in the implemented Windows/Linux user paths. Fast Verify run
-`29225796390` passed both build/source legs and both fresh onefile self-check legs:
+`29228970285` passed both build/source legs and both fresh onefile self-check legs:
 each source leg reported `182/182` self-check and `140/140` GUI acceptance; each
 fresh leg reported `182/182` without project Python dependencies. The historical
 Full Release baseline also ran all six Package/fresh legs successfully and its
@@ -59,7 +59,7 @@ the exact command and the explicit old-commit identity boundary.
 
 ## Residual delivery action
 
-Fast Verify is complete for `main` at `29225796390`, and its status has been
+Fast Verify is complete for `main` at `29228970285`, and its status has been
 recorded in Issue #2/#3. The historical baseline and 54-sample visual review remain
 independent evidence boundaries; do not create another issue. A new Full Release
 run is only needed when publishing new binaries or when a serious cross-platform
