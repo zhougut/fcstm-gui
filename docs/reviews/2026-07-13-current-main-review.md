@@ -58,11 +58,17 @@ for the exact command and the explicit old-commit identity boundary.
 - Documentation index: `docs/验收矩阵.md` and `docs/验收证据索引.md`.
 - Full operating procedure: `docs/完整操作验收手册.md`.
 
-## Residual delivery action
+## Final Status
 
 Fast Verify is complete for `main` at `29228970285`, and its status plus the
-persisted visual attestation have been recorded in Issue #2/#3. The historical
-baseline remains an explicit product-lineage evidence boundary; do not create
-another issue. A new Full Release run is only needed when publishing new binaries,
-when the core product tree changes, or when a serious cross-platform failure is
-discovered.
+persisted visual attestation have been recorded in Issue #1/#2/#3. The current
+product tree is byte-identical to the accepted Full Release product tree rooted at
+`b6bb7e2`; the six-package/fresh matrix and strict `54/54` visual attestation are
+therefore valid as `PASS-LINEAGE-ATTESTED` evidence for this docs-only lineage.
+
+This is the accepted READY state for the current maintenance branch. It does not
+rename the historical binaries as current-SHA artifacts. A new Full Release run is
+required only when publishing new binaries, changing the core product/dependency/
+packaging tree, or discovering a serious cross-platform failure. The previous
+Full Release took more than two hours wall-clock due to the three-platform matrix,
+so it is deliberately excluded from ordinary docs-only feedback.
