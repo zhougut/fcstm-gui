@@ -151,6 +151,7 @@ def test_build_workflow_keeps_fresh_products_independent_of_host_toolchains():
     workflow = BUILD_WORKFLOW.read_text(encoding="utf-8")
     verify = workflow.split("  verify:\n", 1)[1]
     assert "needs: build\n    if: ${{ always() }}" in verify
+    assert "python -m pytest test -q --timeout=600" in workflow
     assert workflow.count("FCSTM_GUI_PRODUCT_LAYOUT:") == 5
     assert "FCSTM_GUI_PRODUCT_LAYOUT: source" in workflow
     assert workflow.count("FCSTM_GUI_PRODUCT_LAYOUT: onedir") == 2
