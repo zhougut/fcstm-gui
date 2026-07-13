@@ -174,6 +174,19 @@ def test_build_workflow_keeps_fresh_products_independent_of_host_toolchains():
 
 def test_fast_workflow_is_the_short_windows_linux_gate():
     workflow = FAST_WORKFLOW.read_text(encoding="utf-8")
+    assert "    paths:" in workflow
+    for path in (
+        "      - 'app/**'",
+        "      - 'main.py'",
+        "      - 'main.spec'",
+        "      - 'requirements*.txt'",
+        "      - 'scripts/**'",
+        "      - 'test/**'",
+        "      - 'docs/*.schema.json'",
+        "      - '.github/workflows/fast-verify.yml'",
+    ):
+        assert workflow.count(path) == 2, path
+    assert "Documentation, screenshots, and review records intentionally do not match" in workflow
     assert "timeout-minutes: 10" in workflow
     assert workflow.count("timeout-minutes: 10") >= 2
     assert "cancel-in-progress: true" in workflow
@@ -261,7 +274,13 @@ def test_manifest_images_resolve_to_stable_acceptance_ids_or_explicit_aliases(ma
 
 
 def test_user_facing_markdown_has_no_missing_local_links_or_images():
-    markdown_files = (GUIDE, ROOT / "docs" / "使用说明.md", ROOT / "README.md")
+    markdown_files = (
+        GUIDE,
+        ROOT / "docs" / "使用说明.md",
+        ROOT / "docs" / "验收截图索引.md",
+        ROOT / "docs" / "images" / "acceptance-140" / "README.md",
+        ROOT / "README.md",
+    )
     pattern = re.compile(r"!?(?:\[[^\]]*\])\(([^)]+)\)|<img[^>]+src=[\"']([^\"']+)")
     for document in markdown_files:
         text = document.read_text(encoding="utf-8")
