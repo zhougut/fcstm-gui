@@ -34,7 +34,7 @@ copy or alter the products.
 ## Product Lineage
 
 The following command returned exit code `0` at `main@ec4311d` and remains true for
-the docs-only descendants `8ea46de` and `aa834a4`:
+the docs-only descendants through `e1e068f`:
 
 ```bash
 git diff --quiet b6bb7e2..HEAD -- \

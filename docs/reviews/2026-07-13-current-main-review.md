@@ -1,10 +1,10 @@
 # Current Main Review: Fast Gate And Documentation
 
-- reviewed commit: `eaf101e`
+- reviewed commit: `e1e068f`
 - reviewer: Codex root (implementation and GUI evidence review)
 - scope: existing Issue #2/#3, current `main`, GUI acceptance contract, workflow
   topology, Chinese operation manual, source-reference screenshots, and the
-  Fast Verify run `29227721434` and previously completed Full Release baseline
+  Fast Verify run `29228970285` and previously completed Full Release baseline
   `29216171779`
 
 ## Findings
