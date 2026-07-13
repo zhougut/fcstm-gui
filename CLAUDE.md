@@ -261,6 +261,10 @@ always expose the same contract.
   after many dialogs. While waiting for the real active/focus facts, repeat
   `raise_`, `activateWindow`, and `setFocus`; one request followed by passive
   polling can time out even though the window remains usable.
+- Fixture preparation for a non-keyboard acceptance item may trigger the real
+  workspace QAction when Cocoa intentionally withholds active-window status
+  after an I/O-failure dialog. Keep shortcut proof in the independent keyboard
+  item; still drive the prepared workflow's real buttons and business facts.
 - Qt serializes the macOS Command modifier as `Meta` in portable shortcut text.
   Cross-platform report tests must expect `Meta+<key>` on Darwin and
   `Ctrl+<key>` on Linux/Windows; hard-coding the display label is not portable.

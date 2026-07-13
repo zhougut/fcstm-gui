@@ -1909,13 +1909,21 @@ class AcceptanceDriver(object):
             and result.stamp.source_revision == session.source_revision
         )
 
-    def simulation(self):
+    def simulation(self, use_shortcut=True):
         panel = self.window.simulation_panel
-        journey = self._activate_workspace_shortcut(
-            self.window.action_show_simulation,
-            self.window.simulation_workspace,
-            "simulation_initialize_button",
-        )
+        if use_shortcut:
+            journey = self._activate_workspace_shortcut(
+                self.window.action_show_simulation,
+                self.window.simulation_workspace,
+                "simulation_initialize_button",
+            )
+        else:
+            self.window.action_show_simulation.trigger()
+            self._wait_until(
+                lambda: self.window.workspace_tabs.currentWidget()
+                is self.window.simulation_workspace
+            )
+            journey = {"activation": "QAction.trigger fixture setup"}
         _wait_signal(
             self.window.simulation_task_finished,
             lambda: _press(panel.initialize_button),
@@ -2779,7 +2787,7 @@ class AcceptanceDriver(object):
 
     def task_clear_filtered(self):
         self.document_failed_load_preserves_session()
-        self.simulation()
+        self.simulation(use_shortcut=False)
         dock = self.window.task_result_dock
         dock.show()
         dock.refresh()
