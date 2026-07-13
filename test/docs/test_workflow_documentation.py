@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from scripts.verify_evidence_contract import ACCEPTANCE_NAMES
+
 
 ROOT = Path(__file__).resolve().parents[2]
 GUIDE = ROOT / "docs" / "完整操作验收手册.md"
@@ -173,13 +175,25 @@ def test_build_workflow_keeps_fresh_products_independent_of_host_toolchains():
 def test_fast_workflow_is_the_short_windows_linux_gate():
     workflow = FAST_WORKFLOW.read_text(encoding="utf-8")
     assert "timeout-minutes: 10" in workflow
+    assert workflow.count("timeout-minutes: 10") >= 2
     assert "cancel-in-progress: true" in workflow
     assert "label: linux-x86_64" in workflow
     assert "label: windows-x86_64" in workflow
     assert "main.py --self-check" in workflow
     assert "main.py --acceptance-check" in workflow
     assert "182" in workflow and "140" in workflow
-    assert "fcstm-gui-${{ matrix.label }}-fast-evidence" in workflow
+    assert "  build:\n" in workflow
+    assert "  fresh:\n" in workflow
+    assert "needs: build" in workflow
+    assert "FCSTM_GUI_BUILD_MODE: onefile" in workflow
+    assert "fcstm-gui-${{ matrix.label }}-fast-product" in workflow
+    assert "fcstm-gui-${{ matrix.label }}-fast-fresh-evidence" in workflow
+
+    fresh = workflow.split("  fresh:\n", 1)[1]
+    assert "actions/download-artifact@v8" in fresh
+    assert "--self-check" in fresh
+    assert "--acceptance-check" not in fresh
+    assert "project Python dependencies" in fresh
 
 
 def test_workflow_manifest_is_source_only_and_manually_reviewed(manifest):
@@ -195,6 +209,17 @@ def test_workflow_manifest_is_source_only_and_manually_reviewed(manifest):
     assert manifest["capture"]["viewport"] == "1280x720"
     assert manifest["capture"]["scale"] == "1"
     assert manifest["capture"]["font_family"] == "Noto Sans CJK SC"
+    aliases = manifest["acceptance_aliases"]
+    assert set(aliases) == {
+        "diagnostics.recover",
+        "dynamic.suite",
+        "export.existing-target",
+        "generation.templates",
+        "simulation.cycle",
+        "tasks.failure-filter",
+        "tasks.history",
+    }
+    assert set(aliases.values()) <= set(ACCEPTANCE_NAMES)
 
 
 def test_all_manifest_images_exist_match_sha_and_are_real_png(manifest):
@@ -220,6 +245,28 @@ def test_all_manifest_images_exist_match_sha_and_are_real_png(manifest):
     }
     assert listed == actual
     assert len(listed) >= 30
+
+
+def test_manifest_images_resolve_to_stable_acceptance_ids_or_explicit_aliases(manifest):
+    stable = set(ACCEPTANCE_NAMES)
+    aliases = manifest["acceptance_aliases"]
+    for item in manifest["images"]:
+        item_id = item["acceptance_id"]
+        resolved = aliases.get(item_id, item_id)
+        assert resolved in stable, (item_id, resolved)
+
+
+def test_user_facing_markdown_has_no_missing_local_links_or_images():
+    markdown_files = (GUIDE, ROOT / "docs" / "使用说明.md", ROOT / "README.md")
+    pattern = re.compile(r"!?(?:\[[^\]]*\])\(([^)]+)\)|<img[^>]+src=[\"']([^\"']+)")
+    for document in markdown_files:
+        text = document.read_text(encoding="utf-8")
+        for match in pattern.finditer(text):
+            target = (match.group(1) or match.group(2)).strip()
+            if not target or target.startswith(("http://", "https://", "mailto:", "#")):
+                continue
+            target = target.split("#", 1)[0].split("?", 1)[0]
+            assert (document.parent / target).exists(), (document, target)
 
 
 def test_eight_core_workflows_have_applicable_stages_and_guide_links(manifest):
@@ -394,7 +441,7 @@ def test_blind_review_and_geometry_templates_are_complete_but_unclaimed():
     ):
         assert field in guide
     assert "blind-review-1 |" in guide
-    assert "fast-verify-current |" in guide
+    assert "fast-verify-previous |" in guide
     assert "full-release-baseline |" in guide
     assert "final-visual-review |" in guide
 

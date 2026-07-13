@@ -1,5 +1,12 @@
 # 【M7 最终产品化】九项 GUI 验收现状回读、交互补强、全流程截图手册与跨平台证据闭环
 
+> **历史规划归档（superseded）**：本文件保留早期 M7 施工决策和失败复盘，文中
+> `5c13c32`、`179/179`、`11/11`、旧 CI run 与 `[ ]` 清单不是当前完成状态。
+> 当前可执行合同以 `docs/验收矩阵.md`、`docs/验收证据索引.md`、
+> `docs/完整操作验收手册.md`、`CLAUDE.md` 和 `.github/workflows/` 为准；稳定
+> 目录是 `182` self-check 与 `140` GUI acceptance。不要照着本归档中的旧命令
+> 或旧数量重新验收。
+
 ## 1. 背景与最终结论
 
 本 Issue 是 [fcstm-gui #1](https://github.com/zhougut/fcstm-gui/issues/1) 的现状回读与最终收口，不复制已经过时的 M0-M6 初始差距描述。权威上游为 [pyfcstm #360](https://github.com/HansBug/pyfcstm/issues/360) 与永久 Draft 验收分支 [pyfcstm PR #362](https://github.com/HansBug/pyfcstm/pull/362)。

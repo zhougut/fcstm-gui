@@ -25,11 +25,11 @@ env:
   PYFCSTM_EXPECTED_COMMIT: f142a656df43e0b80ed6b7ac63b0696345325646
 
 jobs:
-  # This gate deliberately proves the high-value user path on the two
-  # priority desktop platforms.  Full packaging and fresh black-box evidence
-  # remain available from the manual/tagged release workflow.
-  functional:
-    name: Fast functional verify (${{ matrix.label }})
+  # Stage 1 keeps the normal push/PR gate short while still producing a real
+  # native onefile product for the fresh stage.  Full onedir/onefile release
+  # evidence remains in build.yml.
+  build:
+    name: Fast build and source verify (${{ matrix.label }})
     timeout-minutes: 10
     strategy:
       fail-fast: false
@@ -70,7 +70,12 @@ jobs:
       - name: Expose Windows Cairo runtime
         if: runner.os == 'Windows'
         shell: bash
-        run: echo "MINGW_BIN=$(cygpath -u '${{ steps.msys2.outputs.msys2-location }}\mingw64\bin')" >> "$GITHUB_ENV"
+        run: |
+          MINGW_BIN="$(cygpath -u '${{ steps.msys2.outputs.msys2-location }}\mingw64\bin')"
+          echo "MINGW_BIN=$MINGW_BIN" >> "$GITHUB_ENV"
+          # GITHUB_ENV is step-scoped for shell variables; GITHUB_PATH keeps
+          # the DLL directory visible to every later Windows step as well.
+          echo "$MINGW_BIN" >> "$GITHUB_PATH"
 
       - name: Set Windows native GUI resolution
         if: runner.os == 'Windows'
@@ -118,6 +123,7 @@ jobs:
           QT_QPA_PLATFORM: ${{ matrix.qt_platform }}
         run: |
           set -o pipefail
+          if [ -n "${MINGW_BIN:-}" ]; then export PATH="$PATH:$MINGW_BIN"; fi
           if [ "$RUNNER_OS" = "Linux" ]; then
             run_gui() { xvfb-run -a env QT_QPA_PLATFORM=xcb "$@"; }
           else
@@ -142,6 +148,27 @@ jobs:
           print('fast evidence: self-check=182/182 acceptance=140/140')
           PY
 
+      - name: Build fast onefile product
+        shell: bash
+        env:
+          FCSTM_GUI_BUILD_MODE: onefile
+        run: |
+          set -o pipefail
+          if [ -n "${MINGW_BIN:-}" ]; then export PATH="$PATH:$MINGW_BIN"; fi
+          rm -rf build dist
+          pyinstaller --noconfirm main.spec 2>&1 | tee fast-evidence/pyinstaller.log
+          test -f "dist/${{ matrix.executable }}"
+          mkdir -p fast-product
+          cp "dist/${{ matrix.executable }}" "fast-product/${{ matrix.executable }}"
+          python - <<'PY'
+          import hashlib
+          import pathlib
+          path = pathlib.Path('fast-product') / '${{ matrix.executable }}'
+          digest = hashlib.sha256(path.read_bytes()).hexdigest()
+          (path.parent / 'SHA256SUMS.txt').write_text('{}  {}\n'.format(digest, path.name))
+          print(path, path.stat().st_size, digest)
+          PY
+
       - name: Run focused regression and contract tests
         shell: bash
         run: |
@@ -158,5 +185,140 @@ jobs:
         with:
           name: fcstm-gui-${{ matrix.label }}-fast-evidence
           path: fast-evidence
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload fast onefile product
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fcstm-gui-${{ matrix.label }}-fast-product
+          path: fast-product
+          if-no-files-found: error
+          retention-days: 7
+
+  # Stage 2 is intentionally black-box and self-check-only.  It does not
+  # checkout source, install project Python dependencies, or run acceptance
+  # through the source tree.  This catches missing native/data dependencies
+  # without turning the ten-minute fast gate into a second GUI matrix.
+  fresh:
+    # This job has no checkout and installs no project Python dependencies.
+    name: Fast fresh self-check (${{ matrix.label }})
+    needs: build
+    if: ${{ always() }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            label: linux-x86_64
+            executable: fcstm-gui
+            qt_platform: xcb
+          - os: windows-2022
+            label: windows-x86_64
+            executable: fcstm-gui.exe
+            qt_platform: windows
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Prepare fresh evidence directory
+        shell: bash
+        run: mkdir -p fast-fresh-evidence
+
+      - name: Install Linux fresh host runtime only
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            xvfb default-jre-headless
+
+      - name: Set up Java 11 on Windows
+        if: runner.os == 'Windows'
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '11'
+
+      - name: Set Windows native GUI resolution
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: Set-DisplayResolution -Width 1920 -Height 1080 -Force
+
+      - name: Download fast onefile product
+        uses: actions/download-artifact@v8
+        with:
+          name: fcstm-gui-${{ matrix.label }}-fast-product
+          path: downloaded
+
+      - name: Verify fresh tool boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            tool_dir="$(cygpath -u "$RUNNER_TEMP")/fcstm-gui-no-project-tools"
+          else
+            tool_dir="$RUNNER_TEMP/fcstm-gui-no-project-tools"
+          fi
+          mkdir -p "$tool_dir"
+          : > fast-fresh-evidence/tool-preflight.log
+          for tool in python python3 cc c++ gcc g++ clang clang++ dot; do
+            {
+              echo '#!/usr/bin/env sh'
+              echo "echo fresh runner forbids $tool >&2"
+              echo 'exit 127'
+            } > "$tool_dir/$tool"
+            {
+              echo '@echo off'
+              echo "echo fresh runner forbids $tool 1>&2"
+              echo 'exit /b 127'
+            } > "$tool_dir/$tool.cmd"
+            chmod +x "$tool_dir/$tool" "$tool_dir/$tool.cmd"
+          done
+          export PATH="$tool_dir:$PATH"
+          export GRAPHVIZ_DOT="$tool_dir/dot"
+          export CC="$tool_dir/cc"
+          export CXX="$tool_dir/c++"
+          for tool in python python3 cc c++ gcc g++ clang clang++ dot; do
+            resolved="$(command -v "$tool")"
+            printf '%s -> %s\n' "$tool" "$resolved" | tee -a fast-fresh-evidence/tool-preflight.log
+            case "$resolved" in
+              "$tool_dir"/*) ;;
+              *) echo "$tool escaped fresh shadow: $resolved" >&2; exit 1 ;;
+            esac
+            set +e
+            "$tool" --version >> fast-fresh-evidence/tool-preflight.log 2>&1
+            status=$?
+            set -e
+            test "$status" -eq 127
+          done
+
+      - name: Run fresh onefile self-check only
+        shell: bash
+        env:
+          FCSTM_GUI_PRODUCT_LAYOUT: onefile
+          QT_QPA_PLATFORM: ${{ matrix.qt_platform }}
+        run: |
+          set -o pipefail
+          executable="downloaded/${{ matrix.executable }}"
+          if [ "$RUNNER_OS" != "Windows" ]; then chmod +x "$executable"; fi
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            xvfb-run -a env QT_QPA_PLATFORM=xcb "$executable" \
+              --self-check --json-report fast-fresh-evidence/self-check.json \
+              2>&1 | tee fast-fresh-evidence/self-check.log
+          else
+            env QT_QPA_PLATFORM=windows "$executable" \
+              --self-check --json-report fast-fresh-evidence/self-check.json \
+              2>&1 | tee fast-fresh-evidence/self-check.log
+          fi
+          grep -F '"status": "passed"' fast-fresh-evidence/self-check.json
+          grep -F '"passed": 182' fast-fresh-evidence/self-check.json
+          echo 'fresh self-check: 182/182'
+
+      - name: Upload fresh self-check evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fcstm-gui-${{ matrix.label }}-fast-fresh-evidence
+          path: fast-fresh-evidence
           if-no-files-found: error
           retention-days: 7

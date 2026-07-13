@@ -76,8 +76,11 @@ always expose the same contract.
 - Keep ordinary push/PR feedback below ten minutes with
   `.github/workflows/fast-verify.yml`: Windows/Linux native GUI only, real
   `182/182` self-check plus `140/140` acceptance at 1280x720, focused contract
-  tests, and `timeout-minutes: 10`. Use concurrency cancellation so stale docs
-  commits do not queue duplicate runs.
+  tests, and `timeout-minutes: 10`. Fast Verify is itself two-stage: Stage 1
+  builds a lightweight onefile after source checks; Stage 2 downloads it on a
+  fresh Windows/Linux runner and runs self-check only, without project Python
+  dependencies. Use concurrency cancellation so stale docs commits do not queue
+  duplicate runs.
 - Keep the full three-platform onedir/onefile and fresh evidence matrix in
   `.github/workflows/build.yml`, triggered manually or by a release tag. It is
   a release-evidence workflow, not the default documentation gate; do not
@@ -96,6 +99,15 @@ always expose the same contract.
   frozen-product execution. Resolve and execute every shadow command first and
   require exit code 127; retain that preflight log as evidence. Restore the host
   PATH only in the later evidence-control-plane step and record that interpreter.
+
+### Recent Cross-Platform Incident
+
+- Windows Cairo DLLs are supplied by the MSYS2 MinGW runtime during source and
+  PyInstaller steps. Writing `MINGW_BIN` to `GITHUB_ENV` does not export a shell
+  variable into later independent Actions steps; every Windows step that loads
+  Cairo must explicitly append `MINGW_BIN` to `PATH` (and the setup step should
+  also write it to `GITHUB_PATH`). A source-only green run is insufficient when
+  a later self-check step cannot resolve `libcairo-2.dll`.
 - Every Windows step that imports CairoSVG, including isolated coverage gates,
   must append the MSYS2 MinGW runtime directory to PATH. Environment changes
   inside one GitHub Actions shell step do not carry into the next step.

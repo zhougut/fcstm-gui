@@ -12,6 +12,7 @@
     "source",
     "capture",
     "manual_review",
+    "acceptance_aliases",
     "images"
   ],
   "properties": {
@@ -79,6 +80,13 @@
         "findings": {"type": "array", "items": {"type": "string"}}
       },
       "additionalProperties": false
+    },
+    "acceptance_aliases": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1
+      }
     },
     "images": {
       "type": "array",

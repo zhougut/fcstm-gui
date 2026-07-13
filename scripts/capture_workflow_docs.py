@@ -52,6 +52,19 @@ WORKFLOWS = (
     "11-cross-cutting",
 )
 
+# A source-reference image can illustrate a broader workflow than one stable
+# acceptance item. Keep that relationship explicit instead of allowing old
+# shorthand IDs to look like independent acceptance contracts.
+SOURCE_REFERENCE_ALIASES = {
+    "diagnostics.recover": "diagnostics.suggested-fix",
+    "dynamic.suite": "dynamic.user",
+    "export.existing-target": "export.overwrite-preserves-target",
+    "generation.templates": "generation.python",
+    "simulation.cycle": "simulation.step",
+    "tasks.failure-filter": "tasks.filter",
+    "tasks.history": "tasks.registry.load",
+}
+
 
 class WorkflowCapture(object):
     def __init__(self, output, viewport, scale):
@@ -1091,6 +1104,7 @@ class WorkflowCapture(object):
                 "reviewed_at": None,
                 "findings": [],
             },
+            "acceptance_aliases": SOURCE_REFERENCE_ALIASES,
             "images": self.images,
         }
         target = self.output / "manifest.json"

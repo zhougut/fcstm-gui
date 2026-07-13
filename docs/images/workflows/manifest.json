@@ -1,4 +1,13 @@
 {
+  "acceptance_aliases": {
+    "diagnostics.recover": "diagnostics.suggested-fix",
+    "dynamic.suite": "dynamic.user",
+    "export.existing-target": "export.overwrite-preserves-target",
+    "generation.templates": "generation.python",
+    "simulation.cycle": "simulation.step",
+    "tasks.failure-filter": "tasks.filter",
+    "tasks.history": "tasks.registry.load"
+  },
   "capture": {
     "font_family": "Noto Sans CJK SC",
     "font_point_size": 10,

@@ -40,7 +40,9 @@ not a substitute for downloaded release evidence.
 ## Current gates
 
 - Default push/PR: `.github/workflows/fast-verify.yml`, Windows/Linux only,
-  `timeout-minutes: 10`, real `182/182` self-check plus `140/140` acceptance.
+  two stages with `timeout-minutes: 10` per job: Stage 1 real `182/182`
+  self-check plus `140/140` acceptance and a lightweight onefile build; Stage 2
+  fresh onefile `182/182` self-check without project Python dependencies.
 - Release evidence: `.github/workflows/build.yml`, manual or `v*` tag only,
   three-platform onedir/onefile and fresh black-box matrix.
 - Documentation index: `docs/验收矩阵.md` and `docs/验收证据索引.md`.
