@@ -34,8 +34,9 @@ copy or alter the products.
 
 ## Product Lineage
 
-The following command returned exit code `0` at `main@ec4311d` and remains true for
-the docs-only descendants through `e1e068f`:
+The following command returns exit code `0` on the current `main` docs-only lineage;
+the same product tree remains unchanged through every subsequent documentation-only
+commit:
 
 ```bash
 git diff --quiet b6bb7e2..HEAD -- \

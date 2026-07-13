@@ -1,6 +1,6 @@
 # Current Main Review: Fast Gate And Documentation
 
-- reviewed commit: `3c54c25`
+- reviewed tree: current `main` docs-only lineage (product tree rooted at `b6bb7e2`)
 - reviewer: Codex root (implementation and GUI evidence review)
 - scope: existing Issue #2/#3, current `main`, GUI acceptance contract, workflow
   topology, Chinese operation manual, source-reference screenshots, and the
