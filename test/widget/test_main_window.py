@@ -1817,6 +1817,9 @@ state TrafficLight {
         )
         assert window.model_explorer_dock.isVisible()
         assert window.property_inspector_dock.isVisible()
+        assert window.workspace_tabs.width() >= 700
+        assert window.model_explorer_dock.width() <= 240
+        assert window.property_inspector_dock.width() <= 300
         assert window.tree_all_state.currentItem() is window.tree_all_state.topLevelItem(0)
         assert window.property_path_label.text() == "状态：Workbench"
         assert window.model_explorer_dock.isAncestorOf(window.tree_all_state)

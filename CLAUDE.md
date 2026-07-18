@@ -363,6 +363,35 @@ always expose the same contract.
   at runtime; in particular, Qt5 combo size-adjust policies can exceed a nested
   layout allocation under offscreen rendering unless width policy and spacing
   are explicit.
+- A completion signal can carry a cancelled result with the same session and
+  revision as the current document when rapid edits supersede equivalent task
+  attempts. Acceptance waits for validation must require successful status and
+  a value whose session, revision, and exact source text all match the UI.
+- Windows can temporarily refuse `OleSetClipboard` during a long native GUI
+  run, turning a synthetic paste into an empty edit. Acceptance text replacement
+  must select and delete through key events, commit the replacement through a
+  Qt input-method event, and wait for the exact target text instead of depending
+  on the process-global system clipboard.
+- `QTest.keyClicks` only maps its ASCII key table and can assert-abort a native
+  run when an acceptance artifact path contains Chinese characters. Route all
+  field replacement, including absolute generation/export paths, through the
+  Unicode-safe input-method helper rather than assuming the workspace is ASCII.
+- Native-path redaction does not automatically redact percent-encoded `file:`
+  URIs. Add each configured root's canonical URI form to the same redaction
+  boundary so property inspectors, diagnostic details, and tooltips cannot
+  reveal the workspace through an alternate representation.
+- A dock's minimum width does not provide a usable central workspace: content
+  size hints can let both side docks consume half of a 1280x720 window. Apply a
+  reviewed one-time initial dock split, preserve later user resizing, and assert
+  the resulting central-tab width in a shown native window.
+- Revision-bound views must invalidate their presented content when the source
+  stamp changes. In particular, clear an old graph scene and dynamic-validation
+  report, disable actions that operate on those results, and show a rerun or
+  refresh empty state instead of leaving stale pixels that appear current.
+- Diagnostics need an initial column budget at the supported compact viewport.
+  Keep code and location columns user-resizable but bounded initially, stretch
+  the message column, and prove that the row action is visible without horizontal
+  scrolling; also distinguish no findings from no filter matches.
 
 ## Required Local Evidence
 

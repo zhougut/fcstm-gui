@@ -612,6 +612,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         )
 
     def _init_workbench_layout(self):
+        self._workbench_docks_sized = False
         self.model_explorer_dock.hide()
         self.property_inspector_dock.hide()
         self.action_toggle_model_explorer = (
@@ -634,6 +635,16 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self.menu_view.addAction(self.action_toggle_property_inspector)
         self.setCorner(Qt.BottomLeftCorner, Qt.BottomDockWidgetArea)
         self.setCorner(Qt.BottomRightCorner, Qt.BottomDockWidgetArea)
+
+    def _size_workbench_docks_on_first_show(self):
+        if self._workbench_docks_sized:
+            return
+        self._workbench_docks_sized = True
+        self.resizeDocks(
+            [self.model_explorer_dock, self.property_inspector_dock],
+            [220, 280],
+            Qt.Horizontal,
+        )
 
     def _init_graph_workspace(self):
         layout = self.graph_workspace.layout()
@@ -871,6 +882,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self.state_manager = StateManager()
         self.model_explorer_dock.show()
         self.property_inspector_dock.show()
+        QtCore.QTimer.singleShot(0, self._size_workbench_docks_on_first_show)
         if self.at_page_initial:
             self.stackedWidget_state_machine.setCurrentIndex(1)
             self.at_page_initial = False
@@ -1784,6 +1796,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self._restore_state_tree_selection(preserve_selected_state_path)
         self.model_explorer_dock.show()
         self.property_inspector_dock.show()
+        QtCore.QTimer.singleShot(0, self._size_workbench_docks_on_first_show)
         self._record_recent_file(session.path)
         self._update_document_actions()
 
@@ -1964,7 +1977,9 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self.simulation_panel.set_document_available(
             current_valid, revision=revision, fingerprint=fingerprint
         )
-        self.dynamic_validation_panel.set_document_available(current_valid)
+        self.dynamic_validation_panel.set_document_available(
+            current_valid, revision=revision, fingerprint=fingerprint
+        )
         self.graph_panel.set_available(
             current_valid,
             revision=revision,
@@ -2024,7 +2039,9 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self.diagnostics_panel.set_redactor(redactor)
         session = self.document_session
         if session is None or not session.current_diagnostics:
-            self.diagnostics_panel.clear()
+            self.diagnostics_panel.clear(
+                "未打开文档" if session is None else "当前版本未发现问题"
+            )
             return
         snapshot = session.current_valid_snapshot or session.last_valid_snapshot
         dependency_fingerprint = (

@@ -230,6 +230,13 @@ class PathRedactor:
         result = value
         for root, marker in self._roots:
             variants = {root, root.replace("\\", "/"), root.replace("/", "\\")}
+            try:
+                # Source references are represented as percent-encoded file URIs.
+                # Redacting only native paths leaves the same local directory visible
+                # in diagnostics and property inspectors.
+                variants.add(Path(root).as_uri())
+            except ValueError:
+                pass
             for variant in sorted(variants, key=len, reverse=True):
                 result = re.sub(
                     re.escape(variant) + r"(?![A-Za-z0-9_.-])",

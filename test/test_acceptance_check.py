@@ -3,12 +3,18 @@ from __future__ import unicode_literals
 import hashlib
 import json
 import platform
+from types import SimpleNamespace
+
+from PyQt5 import QtWidgets
 
 from app.acceptance_check import (
+    AcceptanceDriver,
     _is_preapproved_native_overlap,
+    _keyboard_replace,
     _parse_viewport,
     run_acceptance_check,
 )
+from app.application.task_runner import TaskResult, TaskStamp, TaskStatus
 
 
 def test_parse_viewport_rejects_malformed_or_too_small_values():
@@ -48,6 +54,38 @@ def test_native_overlap_preapproval_is_exact_and_function_oriented():
         "ordinary_simulation_panel",
         ("simulation_cancel_button", "unknown_button"),
     )
+
+
+def test_current_validation_predicate_rejects_cancelled_same_revision(tmp_path):
+    driver = AcceptanceDriver(tmp_path / "artifacts", (1280, 720))
+    session = SimpleNamespace(
+        session_id="session", source_revision=4, source_text="valid"
+    )
+    driver.window = SimpleNamespace(document_session=session)
+    stamp = TaskStamp("task", "document", "session", 4, 1)
+
+    assert not driver._is_current_validation(
+        TaskResult(stamp=stamp, status=TaskStatus.CANCELLED)
+    )
+    assert driver._is_current_validation(
+        TaskResult(
+            stamp=stamp,
+            status=TaskStatus.SUCCESS,
+            value=SimpleNamespace(
+                session_id="session", source_revision=4, source_text="valid"
+            ),
+        )
+    )
+
+
+def test_keyboard_replace_commits_multiline_unicode_without_clipboard(qtbot):
+    editor = QtWidgets.QPlainTextEdit("old")
+    qtbot.addWidget(editor)
+    editor.show()
+
+    _keyboard_replace(editor, "第一行\nstate Root;")
+
+    assert editor.toPlainText() == "第一行\nstate Root;"
 
 
 def test_full_gui_acceptance_writes_report(qtbot, tmp_path, monkeypatch):

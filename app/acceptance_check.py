@@ -15,6 +15,7 @@ from pathlib import Path
 
 from PyQt5 import QtCore, QtGui, QtTest, QtWidgets
 
+from app.application.task_runner import TaskStatus
 from app.model.session import ValidationState
 from app.source import SourceDocument
 from app.utils.application_font import (
@@ -135,10 +136,12 @@ def _press(button):
 
 def _keyboard_replace(editor, text):
     editor.setFocus(QtCore.Qt.TabFocusReason)
-    QtWidgets.QApplication.clipboard().setText(text)
     QtTest.QTest.keyClick(editor, QtCore.Qt.Key_A, QtCore.Qt.ControlModifier)
     QtTest.QTest.keyClick(editor, QtCore.Qt.Key_Backspace)
-    QtTest.QTest.keyClick(editor, QtCore.Qt.Key_V, QtCore.Qt.ControlModifier)
+    if text:
+        event = QtGui.QInputMethodEvent()
+        event.setCommitString(str(text))
+        QtWidgets.QApplication.sendEvent(editor, event)
 
 
 def _select_combo_data(combo, value):
@@ -899,10 +902,7 @@ class AcceptanceDriver(object):
 
     @staticmethod
     def _keyboard_text(widget, value):
-        widget.setFocus(QtCore.Qt.TabFocusReason)
-        QtTest.QTest.keySequence(widget, QtGui.QKeySequence.SelectAll)
-        QtTest.QTest.keyClick(widget, QtCore.Qt.Key_Backspace)
-        QtTest.QTest.keyClicks(widget, str(value))
+        _keyboard_replace(widget, str(value))
 
     def _wait_until(self, predicate, timeout_ms=3000):
         deadline = time.time() + timeout_ms / 1000.0
@@ -1620,7 +1620,10 @@ class AcceptanceDriver(object):
         _wait_signal(
             self.window.document_validation_finished,
             restore_valid,
-            accept=self._is_current_validation,
+            accept=lambda result: (
+                self._is_current_validation(result)
+                and editor.toPlainText() == _SOURCE
+            ),
         )
         if self.window.document_session.current_valid_snapshot is None:
             raise RuntimeError("valid source recovery did not restore snapshot")
@@ -1905,8 +1908,13 @@ class AcceptanceDriver(object):
         session = self.window.document_session
         return bool(
             session is not None
+            and result.status is TaskStatus.SUCCESS
             and result.stamp.session_id == session.session_id
             and result.stamp.source_revision == session.source_revision
+            and result.value is not None
+            and result.value.session_id == session.session_id
+            and result.value.source_revision == session.source_revision
+            and result.value.source_text == session.source_text
         )
 
     def simulation(self, use_shortcut=True):
