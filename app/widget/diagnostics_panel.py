@@ -11,6 +11,7 @@ from app.application.diagnostics import DiagnosticQuery, DiagnosticSourceKind
 class DiagnosticsPanel(QtWidgets.QWidget):
     locate_requested = QtCore.pyqtSignal(object)
     suggested_fix_requested = QtCore.pyqtSignal(object)
+    check_requested = QtCore.pyqtSignal()
 
     COLUMN_SEVERITY = 0
     COLUMN_SOURCE = 1
@@ -67,6 +68,13 @@ class DiagnosticsPanel(QtWidgets.QWidget):
         self.clear_search_button.setToolTip("清空搜索条件")
         filter_row.addWidget(self.clear_search_button)
 
+        self.check_button = QtWidgets.QPushButton("运行检查", self)
+        self.check_button.setObjectName("diagnostics_check_button")
+        self.check_button.setAccessibleName("运行模型检查")
+        self.check_button.setToolTip("手动检查当前版本的状态机")
+        self.check_button.setEnabled(False)
+        filter_row.addWidget(self.check_button)
+
         self.table = QtWidgets.QTableWidget(self)
         self.table.setObjectName("diagnostics_table")
         self.table.setAccessibleName("诊断列表")
@@ -121,8 +129,12 @@ class DiagnosticsPanel(QtWidgets.QWidget):
         self.source_filter.currentIndexChanged.connect(self._refresh)
         self.search_edit.textChanged.connect(self._refresh)
         self.clear_search_button.clicked.connect(self.search_edit.clear)
+        self.check_button.clicked.connect(self.check_requested)
         self.table.itemSelectionChanged.connect(self._update_detail)
         self.table.cellDoubleClicked.connect(self._locate_row)
+
+    def set_check_enabled(self, enabled):
+        self.check_button.setEnabled(bool(enabled))
 
     @property
     def selected_item(self):

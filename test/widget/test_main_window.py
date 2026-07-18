@@ -423,6 +423,14 @@ state TrafficLight {
         )
         with qtbot.waitSignal(window.document_load_finished, timeout=3000):
             window._import_statechart()
+        window.workspace_tabs.setCurrentWidget(window.source_workspace)
+        original_manager = window.state_manager
+        critical_messages = []
+        monkeypatch.setattr(
+            QtWidgets.QMessageBox,
+            "critical",
+            lambda *args, **kwargs: critical_messages.append(args),
+        )
 
         with qtbot.waitSignal(window.document_validation_finished, timeout=3000):
             window.source_editor.setPlainText("state Broken {")
@@ -430,7 +438,9 @@ state TrafficLight {
         assert window.document_session.source_revision == 1
         assert window.document_session.validation_state is ValidationState.INVALID_SYNTAX
         assert window.document_session.last_valid_snapshot.source_revision == 0
-        assert window.state_manager is None
+        assert window.state_manager is original_manager
+        assert window.state_manager.root_state.name == "Root"
+        assert window.workspace_tabs.currentWidget() is window.source_workspace
         assert not window.action_graph_gen.isEnabled()
 
         fixed = "state Fixed { state A; [*] -> A; A -> [*]; }"
@@ -440,7 +450,75 @@ state TrafficLight {
         assert window.document_session.source_revision == 2
         assert window.document_session.validated_revision == 2
         assert window.state_manager.root_state.name == "Fixed"
+        assert window.workspace_tabs.currentWidget() is window.source_workspace
         assert window.action_graph_gen.isEnabled()
+        assert not critical_messages
+
+    def test_source_refresh_button_reports_invalid_source(
+        self, monkeypatch, qtbot, window, tmp_path
+    ):
+        source = tmp_path / "refresh.fcstm"
+        source.write_text(
+            "state Root { state A; [*] -> A; A -> [*]; }",
+            encoding="utf-8",
+        )
+        window._set_active_document_session(window.document_service.load(source))
+        window.workspace_tabs.setCurrentWidget(window.source_workspace)
+        warnings = []
+        monkeypatch.setattr(
+            QtWidgets.QMessageBox,
+            "warning",
+            lambda *args, **kwargs: warnings.append(args),
+        )
+
+        with qtbot.waitSignal(window.document_validation_finished, timeout=3000):
+            window.source_editor.setPlainText("state Broken {")
+        with qtbot.waitSignal(window.document_validation_finished, timeout=3000):
+            qtbot.mouseClick(
+                window.source_refresh_button, QtCore.Qt.LeftButton
+            )
+
+        assert warnings
+        assert warnings[-1][1] == "刷新失败"
+        assert "未通过完整校验" in warnings[-1][2]
+        assert window.state_manager.root_state.name == "Root"
+        assert window.workspace_tabs.currentWidget() is window.source_workspace
+
+    def test_variable_editor_commit_preserves_cursor_and_focus(
+        self, monkeypatch, qtbot, window, tmp_path
+    ):
+        source = tmp_path / "variables.fcstm"
+        source.write_text(
+            "def int a = 0;\nstate Root;",
+            encoding="utf-8",
+        )
+        window._set_active_document_session(window.document_service.load(source))
+        window.show()
+        window.edit_var_def.setFocus()
+        cursor = window.edit_var_def.textCursor()
+        cursor.movePosition(QtGui.QTextCursor.End)
+        cursor.insertText("\ndef int b = 1;")
+        window.edit_var_def.setTextCursor(cursor)
+        warnings = []
+        monkeypatch.setattr(
+            QtWidgets.QMessageBox,
+            "warning",
+            lambda *args, **kwargs: warnings.append(args),
+        )
+
+        qtbot.waitUntil(
+            lambda: window.document_session.source_revision == 1,
+            timeout=3000,
+        )
+
+        assert window.edit_var_def.textCursor().position() == len(
+            window.edit_var_def.toPlainText()
+        )
+        assert window.edit_var_def.hasFocus()
+        assert window.document_session.current_valid_snapshot is not None
+        assert window.edit_var_def.toPlainText().endswith("def int b = 1;")
+        assert not warnings
+        window.hide()
 
     def test_initially_invalid_source_can_be_repaired_and_validated(
         self, qtbot, window, tmp_path

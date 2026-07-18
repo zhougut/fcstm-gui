@@ -3,6 +3,7 @@ from pyfcstm.utils.validate import ModelDiagnostic
 from PyQt5 import QtCore
 from PyQt5 import QtWidgets
 
+from app.application.task_runner import TaskStatus
 from app.model.session import DocumentSession, ValidationState
 from app.widget import AppMainWindow
 
@@ -72,6 +73,26 @@ def test_invalid_inspect_diagnostic_keeps_inspect_provenance(qtbot, tmp_path):
     assert window.diagnostics_panel.table.item(
         0, window.diagnostics_panel.COLUMN_SOURCE
     ).text() == "inspect"
+
+
+def test_diagnostics_page_has_manual_check_button(qtbot, tmp_path):
+    window = _window(qtbot, tmp_path)
+    source = tmp_path / "check.fcstm"
+    source.write_text(
+        "state Root { state A; [*] -> A; A -> [*]; }",
+        encoding="utf-8",
+    )
+    window._set_active_document_session(window.document_service.load(source))
+    window.workspace_tabs.setCurrentWidget(window.diagnostics_workspace)
+
+    assert window.diagnostics_panel.check_button.isEnabled()
+    with qtbot.waitSignal(window.model_check_finished, timeout=3000) as blocker:
+        qtbot.mouseClick(
+            window.diagnostics_panel.check_button, QtCore.Qt.LeftButton
+        )
+
+    assert blocker.args[0].status is TaskStatus.SUCCESS
+    assert window.workspace_tabs.currentWidget() is window.diagnostics_workspace
 
 
 def test_diagnostic_location_rejects_changed_dependency(qtbot, tmp_path):

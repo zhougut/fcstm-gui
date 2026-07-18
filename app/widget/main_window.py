@@ -210,6 +210,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self._setting_source_text = False
         self._setting_projection = False
         self._document_load_requests = {}
+        self._explicit_validation_tasks = set()
         self._variable_edit_timer = QtCore.QTimer(self)
         self._variable_edit_timer.setSingleShot(True)
         self._variable_edit_timer.setInterval(300)
@@ -570,6 +571,24 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self.setWindowTitle("fcstm[*]")
         self.source_editor.setLineWrapMode(QtWidgets.QPlainTextEdit.NoWrap)
         self.source_editor.textChanged.connect(self._on_source_text_changed)
+        source_layout = self.source_workspace.layout()
+        toolbar = QtWidgets.QHBoxLayout()
+        toolbar.setContentsMargins(6, 6, 6, 0)
+        toolbar.addStretch(1)
+        self.source_refresh_button = QtWidgets.QPushButton(
+            "刷新模型", self.source_workspace
+        )
+        self.source_refresh_button.setObjectName("source_refresh_button")
+        self.source_refresh_button.setAccessibleName("从源码刷新模型")
+        self.source_refresh_button.setToolTip(
+            "校验当前源码；通过后刷新模型，失败时显示错误"
+        )
+        self.source_refresh_button.setEnabled(False)
+        self.source_refresh_button.clicked.connect(
+            self._refresh_model_from_source
+        )
+        toolbar.addWidget(self.source_refresh_button)
+        source_layout.insertLayout(0, toolbar)
         self.action_save_state_machine.setEnabled(False)
 
     def _init_diagnostics_panel(self):
@@ -587,6 +606,9 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         )
         self.diagnostics_panel.suggested_fix_requested.connect(
             self._apply_diagnostic_suggested_fix
+        )
+        self.diagnostics_panel.check_requested.connect(
+            self._validate_statechart
         )
 
     def _init_workbench_layout(self):
@@ -1661,12 +1683,38 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         previous_page = self.stackedWidget_state_machine.currentIndex()
         previous_at_initial = self.at_page_initial
         previous_selected_state_path = self._selected_state_path()
+        same_document = bool(
+            previous_session is not None
+            and previous_session.session_id == session.session_id
+        )
+        variable_cursor = self.edit_var_def.textCursor()
+        previous_variable_cursor = (
+            variable_cursor.anchor(),
+            variable_cursor.position(),
+            self.edit_var_def.verticalScrollBar().value(),
+            self.edit_var_def.hasFocus(),
+        )
         preserve_selected_state_path = (
             previous_selected_state_path
-            if previous_session is not None
-            and previous_session.session_id == session.session_id
+            if same_document
             else None
         )
+        projection_manager = manager
+        if (
+            projection_manager is None
+            and same_document
+            and session.last_valid_snapshot is not None
+        ):
+            projection_manager = previous_manager
+            if projection_manager is None:
+                snapshot = session.last_valid_snapshot
+                projection_manager = convert_state_machine_to_state_manager(
+                    snapshot.model,
+                    extract_variable_definitions(
+                        snapshot.source_index.root_document.text
+                    ),
+                    source_index=snapshot.source_index,
+                )
         try:
             if self.source_editor.toPlainText() != session.source_text:
                 self._setting_source_text = True
@@ -1676,11 +1724,15 @@ class AppMainWindow(QMainWindow, UIMainWindow):
                     self._setting_source_text = False
             self._setting_projection = True
             try:
-                if manager is None:
+                if projection_manager is None:
                     self._clear_model_projection()
+                else:
+                    update_ui_from_state_manager(self, projection_manager)
+                if same_document:
+                    self.workspace_tabs.setCurrentIndex(previous_workspace_index)
+                elif projection_manager is None:
                     self.workspace_tabs.setCurrentWidget(self.source_workspace)
                 else:
-                    update_ui_from_state_manager(self, manager)
                     self.workspace_tabs.setCurrentWidget(self.model_workspace)
             finally:
                 self._setting_projection = False
@@ -1708,11 +1760,27 @@ class AppMainWindow(QMainWindow, UIMainWindow):
             raise
 
         self.document_session = session
-        self.state_manager = manager
+        self.state_manager = projection_manager
         self.at_page_initial = False
         self.stackedWidget_state_machine.setCurrentWidget(
             self.page_state_machine_detail
         )
+        if same_document and projection_manager is not None:
+            anchor, position, scroll_value, restore_focus = (
+                previous_variable_cursor
+            )
+            document_length = max(
+                0, self.edit_var_def.document().characterCount() - 1
+            )
+            cursor = QtGui.QTextCursor(self.edit_var_def.document())
+            cursor.setPosition(min(anchor, document_length))
+            cursor.setPosition(
+                min(position, document_length), QtGui.QTextCursor.KeepAnchor
+            )
+            self.edit_var_def.setTextCursor(cursor)
+            self.edit_var_def.verticalScrollBar().setValue(scroll_value)
+            if restore_focus:
+                self.edit_var_def.setFocus(Qt.OtherFocusReason)
         self._restore_state_tree_selection(preserve_selected_state_path)
         self.model_explorer_dock.show()
         self.property_inspector_dock.show()
@@ -1843,6 +1911,8 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         self.action_show_model.setEnabled(model_available)
         self.action_show_source.setEnabled(session is not None)
         self.action_show_diagnostics.setEnabled(session is not None)
+        self.source_refresh_button.setEnabled(session is not None)
+        self.diagnostics_panel.set_check_enabled(current_valid)
         self.action_show_graph.setEnabled(current_valid)
         self.action_show_simulation.setEnabled(current_valid)
         self.action_show_dynamic_validation.setEnabled(current_valid)
@@ -2198,8 +2268,16 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         for channel in ("graph-render", "code-generation", "unified-export"):
             self.task_runner.supersede(channel, self.document_session.session_id)
         self.document_session = pending
-        self._clear_model_projection()
         self._update_document_actions()
+        self._start_document_validation(pending, explicit=False)
+
+    def _refresh_model_from_source(self):
+        session = self.document_session
+        if session is None:
+            return None
+        return self._start_document_validation(session, explicit=True)
+
+    def _start_document_validation(self, pending, explicit=False):
         service = self.document_service
 
         def validate_document(token):
@@ -2235,15 +2313,24 @@ class AppMainWindow(QMainWindow, UIMainWindow):
                 artifacts=(),
                 retry_descriptor=None,
                 exception_chain=(),
-                boundary=TaskBoundary.TRANSIENT,
+                boundary=(
+                    TaskBoundary.EXPLICIT
+                    if explicit
+                    else TaskBoundary.TRANSIENT
+                ),
                 started_at=time.time(),
             )
         )
+        if explicit:
+            self._explicit_validation_tasks.add(handle.stamp.task_id)
         self._refresh_task_result_dock()
         handle.finished.connect(self._finish_document_validation)
+        return handle
 
     @QtCore.pyqtSlot(object)
     def _finish_document_validation(self, result):
+        explicit = result.stamp.task_id in self._explicit_validation_tasks
+        self._explicit_validation_tasks.discard(result.stamp.task_id)
         try:
             try:
                 self.task_center.apply_result(result)
@@ -2252,6 +2339,13 @@ class AppMainWindow(QMainWindow, UIMainWindow):
             self._refresh_task_result_dock()
             current = self.document_session
             if result.status is not TaskStatus.SUCCESS or current is None:
+                if explicit and result.status is TaskStatus.FAILED:
+                    QtWidgets.QMessageBox.critical(
+                        self,
+                        "刷新失败",
+                        "校验源码时发生错误：\n{}".format(result.error),
+                        QtWidgets.QMessageBox.Ok,
+                    )
                 return
             validated = result.value
             if (
@@ -2261,6 +2355,19 @@ class AppMainWindow(QMainWindow, UIMainWindow):
             ):
                 return
             self._set_active_document_session(validated)
+            if explicit:
+                if validated.current_valid_snapshot is not None:
+                    self.statusbar.showMessage("模型已从当前源码刷新", 5000)
+                else:
+                    detail = "\n".join(
+                        str(item) for item in validated.current_diagnostics
+                    ) or "当前源码未通过完整校验。"
+                    QtWidgets.QMessageBox.warning(
+                        self,
+                        "刷新失败",
+                        "当前源码未通过完整校验：\n{}".format(detail),
+                        QtWidgets.QMessageBox.Ok,
+                    )
         finally:
             self.document_validation_finished.emit(result)
 
@@ -2729,7 +2836,11 @@ class AppMainWindow(QMainWindow, UIMainWindow):
 
     def _update_event_table(self, state):
         selected_id = getattr(self._selected_event, "projection_id", None)
-        if self.document_session is None or state is None:
+        if (
+            self.document_session is None
+            or self.document_session.current_valid_snapshot is None
+            or state is None
+        ):
             self._event_projections = ()
         else:
             try:
@@ -2786,7 +2897,10 @@ class AppMainWindow(QMainWindow, UIMainWindow):
     def _update_event_references(self, event):
         references = () if event is None else event.use_refs
         self.event_reference_table.setRowCount(len(references))
-        if self.document_session is None:
+        if (
+            self.document_session is None
+            or self.document_session.current_valid_snapshot is None
+        ):
             return
         index = self.document_session.require_current_valid_snapshot().source_index
         for row, source_ref in enumerate(references):

@@ -354,6 +354,11 @@ always expose the same contract.
   an I/O load failure. Test failed-load session preservation with a real read
   failure after file-dialog acceptance, and assert the original session,
   manager, source, revision, and workspace remain installed.
+- When an invalid source revision keeps the last valid model visible, every
+  derived projection reader must gate on `current_valid_snapshot`. Preserve the
+  visible state/tree data, but clear or disable revision-bound event, action,
+  export, simulation, and reference projections instead of querying them with
+  the invalid session.
 - Layout membership does not prove non-overlap. Inspect mapped widget rectangles
   at runtime; in particular, Qt5 combo size-adjust policies can exceed a nested
   layout allocation under offscreen rendering unless width policy and spacing
