@@ -13,6 +13,14 @@ on:
         description: 'Why the full release matrix is being run'
         required: false
         default: 'release evidence or cross-platform packaging change'
+      target:
+        description: 'Platforms to build and verify'
+        required: true
+        type: choice
+        options:
+          - all
+          - linux-only
+        default: all
 
 permissions:
   contents: read
@@ -30,10 +38,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - {os: ubuntu-22.04, label: linux-x86_64, executable: fcstm-gui, cc: gcc, cxx: g++}
-          - {os: windows-2022, label: windows-x86_64, executable: fcstm-gui.exe, cc: gcc, cxx: g++}
-          - {os: macos-15-intel, label: macos-x86_64, executable: fcstm-gui, cc: clang, cxx: clang++}
+        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.target == 'linux-only' && '[{"os":"ubuntu-22.04","label":"linux-x86_64","executable":"fcstm-gui","cc":"gcc","cxx":"g++"}]' || '[{"os":"ubuntu-22.04","label":"linux-x86_64","executable":"fcstm-gui","cc":"gcc","cxx":"g++"},{"os":"windows-2022","label":"windows-x86_64","executable":"fcstm-gui.exe","cc":"gcc","cxx":"g++"},{"os":"macos-15-intel","label":"macos-x86_64","executable":"fcstm-gui","cc":"clang","cxx":"clang++"}]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -364,10 +369,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - {os: ubuntu-22.04, label: linux-x86_64, executable: fcstm-gui}
-          - {os: windows-2022, label: windows-x86_64, executable: fcstm-gui.exe}
-          - {os: macos-15-intel, label: macos-x86_64, executable: fcstm-gui}
+        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.target == 'linux-only' && '[{"os":"ubuntu-22.04","label":"linux-x86_64","executable":"fcstm-gui"}]' || '[{"os":"ubuntu-22.04","label":"linux-x86_64","executable":"fcstm-gui"},{"os":"windows-2022","label":"windows-x86_64","executable":"fcstm-gui.exe"},{"os":"macos-15-intel","label":"macos-x86_64","executable":"fcstm-gui"}]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - name: Show fresh runner inventory
