@@ -142,7 +142,7 @@ jobs:
           run_gui() {
             case "$RUNNER_OS" in
               Linux) xvfb-run -a env QT_QPA_PLATFORM=xcb "$@" ;;
-              Windows) env QT_QPA_PLATFORM=windows "$@" ;;
+              Windows) env QT_PLUGIN_PATH="$PWD/missing-host-qt-plugins" QT_QPA_PLATFORM_PLUGIN_PATH="$PWD/missing-host-qt-platforms" QT_QPA_PLATFORM=windows "$@" ;;
               macOS) env QT_QPA_PLATFORM=cocoa "$@" ;;
               *) return 1 ;;
             esac
@@ -207,7 +207,7 @@ jobs:
           run_gui() {
             case "$RUNNER_OS" in
               Linux) xvfb-run -a env QT_QPA_PLATFORM=xcb "$@" ;;
-              Windows) env QT_QPA_PLATFORM=windows "$@" ;;
+              Windows) env QT_PLUGIN_PATH="$PWD/missing-host-qt-plugins" QT_QPA_PLATFORM_PLUGIN_PATH="$PWD/missing-host-qt-platforms" QT_QPA_PLATFORM=windows "$@" ;;
               macOS) env QT_QPA_PLATFORM=cocoa "$@" ;;
               *) return 1 ;;
             esac

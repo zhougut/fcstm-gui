@@ -76,6 +76,10 @@ class DiagnosticsPanel(QtWidgets.QWidget):
 
         action_row = QtWidgets.QHBoxLayout()
         action_row.setContentsMargins(0, 0, 0, 0)
+        # Some native styles (notably macOS Cocoa) expand push-button focus
+        # frames beyond their layout item.  Keep an explicit gap so the clear
+        # and check actions remain visually distinct on every platform.
+        action_row.setSpacing(12)
         action_row.addStretch(1)
         action_row.addWidget(self.clear_search_button)
         action_row.addWidget(self.check_button)

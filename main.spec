@@ -1,8 +1,11 @@
 # -*- mode: python ; coding: utf-8 -*-
 import os
-import sys
 import shutil
+import sys
+
 from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_submodules
+from PyQt5.QtCore import QLibraryInfo
+
 
 mode = os.environ.get('FCSTM_GUI_BUILD_MODE', 'onedir').lower()
 datas = [
@@ -29,6 +32,18 @@ else:
     z3_suffixes = ('.so',)
 binaries = [item for item in collect_dynamic_libs('z3', destdir='z3/lib')
             if item[0].lower().endswith(z3_suffixes)]
+
+# Keep the native platform backend explicit. PyInstaller's Qt hook normally
+# discovers it, but a frozen GUI cannot recover if that heuristic changes or a
+# host Qt installation shadows the bundled plugin tree.
+qt_plugin_root = QLibraryInfo.location(QLibraryInfo.PluginsPath)
+qt_platform_dir = os.path.join(qt_plugin_root, 'platforms')
+if os.path.isdir(qt_platform_dir):
+    binaries += [
+        (os.path.join(qt_platform_dir, name), 'PyQt5/Qt5/plugins/platforms')
+        for name in os.listdir(qt_platform_dir)
+        if os.path.isfile(os.path.join(qt_platform_dir, name))
+    ]
 
 if sys.platform == 'win32':
     cairo = shutil.which('libcairo-2.dll')
