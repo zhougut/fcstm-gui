@@ -174,7 +174,7 @@
            <item>
             <widget class="QLabel" name="document_revision_label">
              <property name="text">
-              <string>revision -</string>
+              <string>版本 -</string>
              </property>
             </widget>
            </item>
@@ -753,41 +753,31 @@
          <widget class="QWidget" name="widget_state_add_state" native="true">
           <layout class="QHBoxLayout" name="horizontalLayout_7">
            <property name="spacing">
+            <number>6</number>
+           </property>
+           <property name="leftMargin">
             <number>0</number>
            </property>
            <property name="rightMargin">
             <number>0</number>
            </property>
            <item>
-            <spacer name="horizontalSpacer">
-             <property name="orientation">
-              <enum>Qt::Horizontal</enum>
-             </property>
-             <property name="sizeHint" stdset="0">
-              <size>
-               <width>40</width>
-               <height>20</height>
-              </size>
-             </property>
-            </spacer>
-           </item>
-           <item alignment="Qt::AlignRight">
             <widget class="QPushButton" name="button_add_state">
              <property name="sizePolicy">
-              <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
-               <horstretch>0</horstretch>
+              <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+               <horstretch>1</horstretch>
                <verstretch>0</verstretch>
               </sizepolicy>
              </property>
              <property name="minimumSize">
               <size>
-               <width>200</width>
+               <width>96</width>
                <height>35</height>
               </size>
              </property>
              <property name="maximumSize">
               <size>
-               <width>200</width>
+               <width>16777215</width>
                <height>16777215</height>
               </size>
              </property>
@@ -798,7 +788,7 @@
               </font>
              </property>
              <property name="text">
-              <string>添加状态</string>
+              <string>新建状态</string>
              </property>
             </widget>
            </item>

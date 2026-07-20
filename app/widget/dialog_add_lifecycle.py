@@ -7,6 +7,7 @@ from ..model import StateManager, State
 from .formula_editor import FormulaEditor
 from ..application.formulas import FormulaKind
 from app.utils.dsl_to_ui import extract_variable_definitions
+from .state_selector import populate_state_combo, selected_state
 
 class DialogAddLifecycle(QDialog, UIDialogAddLifecycle):
     def __init__(self, parent, state_manager: StateManager, current_state: State,
@@ -33,6 +34,14 @@ class DialogAddLifecycle(QDialog, UIDialogAddLifecycle):
         self._init_abstract_logic()
 
     def _init_ui(self):
+        populate_state_combo(
+            self.combo_owner_state,
+            self.state_manager,
+            selected_state=self.current_state,
+        )
+        if self.is_edit:
+            self.combo_owner_state.setEnabled(False)
+            self.combo_owner_state.setToolTip("修改操作时保持所属状态不变")
         self.lifecycle_formula_editor = self._wrap_formula_field(self.edit_op)
         if self.is_edit:
             self.setWindowTitle("修改生命周期操作")
@@ -47,9 +56,10 @@ class DialogAddLifecycle(QDialog, UIDialogAddLifecycle):
             FormulaKind.LIFECYCLE,
             revision_provider=self._source_revision,
             variable_definitions_provider=self._variable_definitions,
+            enable_dialog=True,
             parent=self.frame,
         )
-        self.gridLayout.addWidget(editor, 3, 1)
+        self.gridLayout.addWidget(editor, 4, 1)
         return editor
 
     def _source_revision(self):
@@ -113,7 +123,7 @@ class DialogAddLifecycle(QDialog, UIDialogAddLifecycle):
         
         if is_abstract:
             # 选择"是"（抽象）时：禁用操作输入框，启用注释输入框
-            self.edit_op.setEnabled(False)
+            self.lifecycle_formula_editor.setEnabled(False)
             self.edit_op.clear()  # 清空操作内容
             self.edit_annotation.setEnabled(True)
             # 设置提示文本
@@ -121,7 +131,7 @@ class DialogAddLifecycle(QDialog, UIDialogAddLifecycle):
             self.edit_annotation.setPlaceholderText("请输入抽象操作的注释说明")
         else:
             # 选择"否"（非抽象）时：启用操作输入框，禁用注释输入框
-            self.edit_op.setEnabled(True)
+            self.lifecycle_formula_editor.setEnabled(True)
             self.edit_annotation.setEnabled(False)
             self.edit_annotation.clear()  # 清空注释内容
             # 设置提示文本
@@ -189,10 +199,14 @@ class DialogAddLifecycle(QDialog, UIDialogAddLifecycle):
                     return
             else:
                 # 添加模式：添加新的生命周期项
-                if self.current_state.lifecycle is None:
-                    self.current_state.lifecycle = []
+                owner_state = self.get_owner_state()
+                if owner_state is None:
+                    QtWidgets.QMessageBox.warning(self, "错误", "请选择所属状态！")
+                    return
+                if owner_state.lifecycle is None:
+                    owner_state.lifecycle = []
                 
-                self.current_state.lifecycle.append(lifecycle_item)
+                owner_state.lifecycle.append(lifecycle_item)
                 QtWidgets.QMessageBox.information(self, "成功", "生命周期操作添加成功！")
             
             self.accept()
@@ -217,3 +231,8 @@ class DialogAddLifecycle(QDialog, UIDialogAddLifecycle):
             "action": self.edit_op.toPlainText().strip(),  # 使用 "action" 字段名以保持与DSL转换的一致性
             "comment": self.edit_annotation.toPlainText().strip()
         }
+
+    def get_owner_state(self):
+        if self.is_edit:
+            return self.current_state
+        return selected_state(self.combo_owner_state)

@@ -22,6 +22,9 @@ def test_numeric_formula_dialog_validates_initial_value_and_exposes_accessible_c
     assert isinstance(dialog.formula_editor._service, FormulaValidationService)
     assert dialog.formula_text() == "x * 2 + 1"
     assert dialog.formula_editor.last_result.source_revision == 7
+    assert "×" in dialog.preview.toHtml()
+    assert dialog.preview.accessibleName() == "渲染后的公式"
+    assert "sqrt/cbrt" in dialog.syntax_help.text()
     assert dialog.button_box.button(QtWidgets.QDialogButtonBox.Ok).isEnabled()
     assert dialog.button_box.button(QtWidgets.QDialogButtonBox.Ok).text() == "确定"
     assert (
@@ -30,6 +33,19 @@ def test_numeric_formula_dialog_validates_initial_value_and_exposes_accessible_c
     )
     assert dialog.input_field.accessibleName()
     assert dialog.formula_editor.status_label.accessibleName()
+
+
+def test_numeric_formula_dialog_renders_formula_below_multiline_editor(qtbot):
+    dialog = DialogNumericFormula(initial_text="sqrt(x ** 2)", debounce_ms=20)
+    qtbot.addWidget(dialog)
+    dialog.show()
+
+    qtbot.waitUntil(lambda: dialog.formula_editor.is_valid, timeout=1000)
+
+    assert isinstance(dialog.input_field, QtWidgets.QPlainTextEdit)
+    assert dialog.input_field.geometry().top() < dialog.preview.geometry().top()
+    assert "√" in dialog.preview.toHtml()
+    assert "vertical-align:super" in dialog.preview.toHtml()
 
 
 def test_numeric_formula_dialog_debounces_invalid_feedback_and_blocks_accept(qtbot):

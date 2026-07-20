@@ -22,6 +22,34 @@ class TestMainWindow:
         qtbot.addWidget(window)
         return window
 
+    def test_source_editor_uses_four_space_tab_width(self, window):
+        metrics = QtGui.QFontMetricsF(window.source_editor.font())
+        expected = metrics.horizontalAdvance(" ") * 4
+        assert abs(window.source_editor.tabStopDistance() - expected) < 0.5
+
+    def test_new_state_button_text_fits_compact_model_explorer(
+        self, qtbot, window
+    ):
+        qtbot.mouseClick(
+            window.button_initial_new_state_machine,
+            QtCore.Qt.LeftButton,
+        )
+        window.resize(1280, 720)
+        window.show()
+        QtWidgets.QApplication.processEvents()
+
+        text_width = window.button_add_state.fontMetrics().horizontalAdvance(
+            window.button_add_state.text()
+        )
+        assert window.button_add_state.text() == "新建状态"
+        assert window.button_add_state.width() >= text_width + 20
+        button_rect = window.button_add_state.rect()
+        visible_rect = window.button_add_state.visibleRegion().boundingRect()
+        assert visible_rect.contains(button_rect)
+        assert window.button_add_state.geometry().right() <= (
+            window.widget_state_add_state.contentsRect().right()
+        )
+
     def test_new_button_opens_editor_with_empty_state_manager(self, qtbot, window):
         assert window.stackedWidget_state_machine.currentIndex() == 0
         assert not hasattr(window, "state_manager")
@@ -562,7 +590,17 @@ state TrafficLight {
         with qtbot.waitSignal(window.document_validation_finished, timeout=3000):
             window.source_editor.setPlainText(changed)
 
+        assert window.document_session.document_version == 1
+        assert window.document_revision_label.text() == "版本 1"
+
+        changed = "// same unsaved version\nstate Root { state A; [*] -> A; A -> [*]; }\n"
+        with qtbot.waitSignal(window.document_validation_finished, timeout=3000):
+            window.source_editor.setPlainText(changed)
+
         assert window.document_session.dirty
+        assert window.document_session.source_revision == 2
+        assert window.document_session.document_version == 1
+        assert window.document_revision_label.text() == "版本 1"
         window._save_current_document()
 
         assert source.read_text(encoding="utf-8") == changed

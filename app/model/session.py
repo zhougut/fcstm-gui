@@ -67,6 +67,7 @@ class DocumentSession:
     diagnostic_source_kind: Optional[str] = None
     task_ids: Tuple[str, ...] = ()
     encoding_hints: Tuple[Tuple[str, str], ...] = ()
+    document_version: int = 0
 
     def __post_init__(self) -> None:
         valid = self.validation_state in {
@@ -137,10 +138,14 @@ class DocumentSession:
         validation_state: ValidationState = ValidationState.PENDING,
         diagnostics: Tuple[Any, ...] = (),
     ) -> "DocumentSession":
+        next_document_version = (
+            self.document_version if self.dirty else self.document_version + 1
+        )
         return replace(
             self,
             source_text=source_text,
             source_revision=self.source_revision + 1,
+            document_version=next_document_version,
             validation_state=validation_state,
             validated_revision=None,
             current_diagnostics=tuple(diagnostics),

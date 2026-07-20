@@ -349,6 +349,19 @@ def _schedule_state_name_dialog(name):
     QtCore.QTimer.singleShot(0, submit)
 
 
+def _select_state_field(field, value):
+    if isinstance(field, QtWidgets.QComboBox):
+        for index in range(field.count()):
+            data = field.itemData(index)
+            candidate = getattr(data, "name", data)
+            if candidate == value or field.itemText(index) == value:
+                field.setCurrentIndex(index)
+                return True
+        return False
+    _keyboard_replace(field, value)
+    return True
+
+
 def _schedule_transition_dialog(source, target, condition="", action=""):
     attempts = [0]
     filled = [False]
@@ -361,8 +374,10 @@ def _schedule_transition_dialog(source, target, condition="", action=""):
             button = getattr(widget, "button_accept", None)
             if source_field is not None and target_field is not None and widget.isVisible():
                 if not filled[0]:
-                    _keyboard_replace(source_field, source)
-                    _keyboard_replace(target_field, target)
+                    if not _select_state_field(source_field, source):
+                        raise RuntimeError("source state is missing from selector: " + source)
+                    if not _select_state_field(target_field, target):
+                        raise RuntimeError("target state is missing from selector: " + target)
                     _keyboard_replace(widget.edit_condition, condition)
                     _keyboard_replace(widget.edit_op, action)
                     filled[0] = True
@@ -2351,8 +2366,10 @@ class AcceptanceDriver(object):
             )
             dialog.show()
             self.app.processEvents()
-            self._keyboard_text(dialog.edit_source_state, "Idle")
-            self._keyboard_text(dialog.edit_target_state, "Running")
+            if not _select_state_field(dialog.edit_source_state, "Idle"):
+                raise RuntimeError("Idle is missing from the source-state selector")
+            if not _select_state_field(dialog.edit_target_state, "Running"):
+                raise RuntimeError("Running is missing from the target-state selector")
             if kind == "guard":
                 self._keyboard_text(dialog.edit_op, "count = count + 1;")
                 other_token = dialog.effect_formula_editor.pending_request.request_token

@@ -30,6 +30,12 @@ from .formulas import (
     FormulaValidationService,
     FormulaValidationStatus,
 )
+from .formula_render import (
+    FormulaKindDescription,
+    FormulaRenderResult,
+    FormulaRenderService,
+    formula_kind_description,
+)
 from .export import EXPORT_KINDS, ExportResult, ExportService
 from .graph_render import (
     GRAPH_ENGINE,
@@ -97,11 +103,15 @@ __all__ = [
     "ExportResult",
     "ExportService",
     "FormulaKind",
+    "FormulaKindDescription",
     "FormulaLocation",
+    "FormulaRenderResult",
+    "FormulaRenderService",
     "FormulaValidationRequest",
     "FormulaValidationResult",
     "FormulaValidationService",
     "FormulaValidationStatus",
+    "formula_kind_description",
     "GRAPH_ENGINE",
     "GraphRenderError",
     "GraphRenderResult",

@@ -570,6 +570,8 @@ class AppMainWindow(QMainWindow, UIMainWindow):
     def _init_source_editor(self):
         self.setWindowTitle("fcstm[*]")
         self.source_editor.setLineWrapMode(QtWidgets.QPlainTextEdit.NoWrap)
+        source_metrics = QtGui.QFontMetricsF(self.source_editor.font())
+        self.source_editor.setTabStopDistance(source_metrics.horizontalAdvance(" ") * 4)
         self.source_editor.textChanged.connect(self._on_source_text_changed)
         source_layout = self.source_workspace.layout()
         toolbar = QtWidgets.QHBoxLayout()
@@ -1174,6 +1176,12 @@ class AppMainWindow(QMainWindow, UIMainWindow):
             )
 
     def _init_button_state_machine_add_state(self):
+        self.button_add_state.setText("新建状态")
+        self.button_add_state.setMinimumWidth(96)
+        self.button_add_state.setMaximumWidth(16777215)
+        self.button_add_state.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed
+        )
         self.button_add_state.clicked.connect(lambda: self._buton_add_state())
 
     def _init_button_state_machine_expand_all(self):
@@ -1218,15 +1226,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
                 return
 
             # 获取当前选中的状态
-            current_state = self._get_pro_state()
-            if current_state is None:
-                QtWidgets.QMessageBox.warning(
-                    self,
-                    "警告",
-                    "请先选择一个状态！",
-                    QtWidgets.QMessageBox.Ok
-                )
-                return
+            current_state = self._get_pro_state() or self.state_manager.root_state
 
             # 显示生命周期添加对话框
             dialog = DialogAddLifecycle(
@@ -1236,14 +1236,19 @@ class AppMainWindow(QMainWindow, UIMainWindow):
                 mutate_model=self.document_session is None,
             )
             if dialog.exec_() == QtWidgets.QDialog.Accepted:
+                owner_state = (
+                    dialog.get_owner_state()
+                    if hasattr(dialog, "get_owner_state")
+                    else current_state
+                )
                 if self.document_session is not None:
                     self._insert_state_declaration(
-                        current_state,
+                        owner_state,
                         "lifecycle",
                         format_lifecycle_item(dialog.get_lifecycle_data()),
                     )
                 else:
-                    self._update_lifecycle_table(current_state.lifecycle)
+                    self._update_lifecycle_table(owner_state.lifecycle)
                 
         except Exception as e:
             QtWidgets.QMessageBox.critical(
@@ -1306,17 +1311,8 @@ class AppMainWindow(QMainWindow, UIMainWindow):
             )
 
     def _buton_add_state(self):
-        father_state = self._get_pro_state()
-        if father_state is None and self.state_manager.get_root_state() is not None:
-            QtWidgets.QMessageBox.critical(
-                self,
-                "错误",
-                "状态机中只能有一个根状态",
-                QtWidgets.QMessageBox.Ok
-            )
-            return
-        else:
-            self._add_state(father_state, False)
+        father_state = self._get_pro_state() or self.state_manager.get_root_state()
+        self._add_state(father_state, False)
 
     def _add_state(self, father_state: Optional[State], is_edit = False):
         """
@@ -1332,13 +1328,18 @@ class AppMainWindow(QMainWindow, UIMainWindow):
                     parent_state=father_state,
                 )
                 if dialog.exec_() == QtWidgets.QDialog.Accepted:
-                    if father_state is None:
+                    chosen_parent = (
+                        dialog.get_parent_state()
+                        if hasattr(dialog, "get_parent_state")
+                        else father_state
+                    )
+                    if chosen_parent is None:
                         QtWidgets.QMessageBox.warning(
                             self, "不可编辑", "已有文档不能新增第二个根状态。"
                         )
                         return
                     self._insert_state_declaration(
-                        father_state,
+                        chosen_parent,
                         "state",
                         "state {};".format(dialog.get_state_name()),
                     )
@@ -1376,16 +1377,21 @@ class AppMainWindow(QMainWindow, UIMainWindow):
                 dialog = DialogEditState(self, state_manager=self.state_manager, is_edit=False, initial_data=None, parent_state=father_state)
                 if dialog.exec_() == QtWidgets.QDialog.Accepted:
                     new_state_name = dialog.get_state_name()
+                    chosen_parent = (
+                        dialog.get_parent_state()
+                        if hasattr(dialog, "get_parent_state")
+                        else father_state
+                    )
                     try:
                         new_state = State(new_state_name)
-                        if father_state is None and self.state_manager.get_root_state() is None:
+                        if chosen_parent is None and self.state_manager.get_root_state() is None:
                             self.state_manager.root_state = new_state
-                        self.state_manager.add_state(father_state, new_state)
+                        self.state_manager.add_state(chosen_parent, new_state)
                         cur_state_item = QtWidgets.QTreeWidgetItem([new_state_name])
                         cur_state_item.setData(0, Qt.UserRole, new_state)
                         # 如果是添加子状态：
-                        if father_state is not None:
-                            father_item = self.tree_all_state.currentItem()
+                        if chosen_parent is not None:
+                            father_item = self._find_tree_item_for_state(chosen_parent)
                             father_item.addChild(cur_state_item)
                         else:
                             self.tree_all_state.addTopLevelItem(cur_state_item)
@@ -2010,7 +2016,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
                 "未保存" if session.dirty else "已保存"
             )
             self.document_revision_label.setText(
-                "版本 {}".format(session.source_revision)
+                "版本 {}".format(session.document_version)
             )
             self.document_validation_label.setText(
                 {
@@ -2779,6 +2785,18 @@ class AppMainWindow(QMainWindow, UIMainWindow):
         if not callable(get_full_path):
             return None
         return get_full_path()
+
+    def _find_tree_item_for_state(self, target_state):
+        pending = [
+            self.tree_all_state.topLevelItem(index)
+            for index in range(self.tree_all_state.topLevelItemCount())
+        ]
+        while pending:
+            item = pending.pop()
+            if item.data(0, Qt.UserRole) is target_state:
+                return item
+            pending.extend(item.child(index) for index in range(item.childCount()))
+        return None
 
     def _restore_state_tree_selection(self, full_path):
         matching_item = None

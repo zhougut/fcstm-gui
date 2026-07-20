@@ -29,7 +29,7 @@
      </property>
      <layout class="QGridLayout" name="gridLayout" rowstretch="1,1,1,1,1">
       <property name="horizontalSpacing">
-       <number>0</number>
+       <number>10</number>
       </property>
       <item row="4" column="0">
        <widget class="QLabel" name="label_op">
@@ -96,7 +96,7 @@
        </widget>
       </item>
       <item row="1" column="1">
-       <widget class="QLineEdit" name="edit_target_state">
+       <widget class="QComboBox" name="edit_target_state">
         <property name="font">
          <font>
           <family>微软雅黑</family>
@@ -122,7 +122,7 @@
        </widget>
       </item>
       <item row="0" column="1">
-       <widget class="QLineEdit" name="edit_source_state">
+       <widget class="QComboBox" name="edit_source_state">
         <property name="font">
          <font>
           <family>微软雅黑</family>

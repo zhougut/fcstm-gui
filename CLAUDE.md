@@ -392,6 +392,15 @@ always expose the same contract.
   Keep code and location columns user-resizable but bounded initially, stretch
   the message column, and prove that the row action is visible without horizontal
   scrolling; also distinguish no findings from no filter matches.
+- Keep the user-facing document version separate from the internal source
+  revision used for stale-task guards. Increment the displayed version once on
+  the first edit after a save; further unsaved edits remain in that same
+  version while every distinct source change still receives a unique internal
+  revision.
+- Object-creation dialogs must constrain model references to selectors backed
+  by current model objects and show full state paths when names can repeat.
+  Preserve pseudo-state and forced-transition choices explicitly instead of
+  falling back to free-form state names.
 
 ## Required Local Evidence
 
