@@ -21,6 +21,11 @@ on:
           - all
           - linux-only
         default: all
+      package_only:
+        description: 'Build and upload products without running verification'
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -107,6 +112,7 @@ jobs:
           make ui
 
       - name: Verify pinned pyfcstm source
+        if: ${{ github.event_name != 'workflow_dispatch' || !inputs.package_only }}
         shell: bash
         env:
           PYFCSTM_TARGET_LABEL: ${{ matrix.label }}
@@ -138,6 +144,7 @@ jobs:
           PY
 
       - name: Tests and source product checks
+        if: ${{ github.event_name != 'workflow_dispatch' || !inputs.package_only }}
         shell: bash
         env:
           FCSTM_GUI_PRODUCT_LAYOUT: source
@@ -185,6 +192,7 @@ jobs:
           done
 
       - name: M7 application service branch coverage gate
+        if: ${{ github.event_name != 'workflow_dispatch' || !inputs.package_only }}
         shell: bash
         env:
           QT_QPA_PLATFORM: offscreen
@@ -200,6 +208,7 @@ jobs:
             --fail-under=90 | tee evidence/source/application-branch-coverage.txt
 
       - name: Generate, compile, and execute all five templates
+        if: ${{ github.event_name != 'workflow_dispatch' || !inputs.package_only }}
         shell: bash
         env:
           CC: ${{ matrix.cc }}
@@ -216,6 +225,7 @@ jobs:
         env:
           FCSTM_GUI_BUILD_MODE: onedir
           FCSTM_GUI_PRODUCT_LAYOUT: onedir
+          PACKAGE_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.package_only }}
         run: |
           set -o pipefail
           if [ -n "${MINGW_BIN:-}" ]; then export PATH="$PATH:$MINGW_BIN"; fi
@@ -227,7 +237,12 @@ jobs:
               *) return 1 ;;
             esac
           }
+          mkdir -p evidence
           pyinstaller --noconfirm main.spec 2>&1 | tee evidence/onedir-build.log
+          if [ "$PACKAGE_ONLY" = "true" ]; then
+            echo "Package-only mode: skipping onedir verification."
+            exit 0
+          fi
           mkdir -p evidence/onedir
           executable="./dist/fcstm-gui/${{ matrix.executable }}"
           run_gui "$executable" --self-check --json-report evidence/onedir/self-check.json 2>&1 | tee evidence/onedir/self-check.log
@@ -266,6 +281,7 @@ jobs:
         env:
           FCSTM_GUI_BUILD_MODE: onefile
           FCSTM_GUI_PRODUCT_LAYOUT: onefile
+          PACKAGE_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.package_only }}
         run: |
           set -o pipefail
           if [ -n "${MINGW_BIN:-}" ]; then export PATH="$PATH:$MINGW_BIN"; fi
@@ -278,7 +294,12 @@ jobs:
             esac
           }
           rm -rf build dist
+          mkdir -p evidence
           pyinstaller --noconfirm main.spec 2>&1 | tee evidence/onefile-build.log
+          if [ "$PACKAGE_ONLY" = "true" ]; then
+            echo "Package-only mode: skipping onefile verification."
+            exit 0
+          fi
           mkdir -p evidence/onefile
           executable="./dist/${{ matrix.executable }}"
           run_gui "$executable" --self-check --json-report evidence/onefile/self-check.json 2>&1 | tee evidence/onefile/self-check.log
@@ -309,6 +330,7 @@ jobs:
           retention-days: 14
 
       - name: Build machine-readable evidence manifest
+        if: ${{ github.event_name != 'workflow_dispatch' || !inputs.package_only }}
         shell: bash
         run: |
           python - <<'PY'
@@ -365,7 +387,7 @@ jobs:
   verify:
     name: Verify on fresh ${{ matrix.label }}
     needs: build
-    if: ${{ always() }}
+    if: ${{ always() && (github.event_name != 'workflow_dispatch' || !inputs.package_only) }}
     strategy:
       fail-fast: false
       matrix:
