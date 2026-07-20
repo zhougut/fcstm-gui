@@ -11,6 +11,7 @@ from app.application.diagnostics import DiagnosticQuery, DiagnosticSourceKind
 class DiagnosticsPanel(QtWidgets.QWidget):
     locate_requested = QtCore.pyqtSignal(object)
     suggested_fix_requested = QtCore.pyqtSignal(object)
+    check_requested = QtCore.pyqtSignal()
 
     COLUMN_SEVERITY = 0
     COLUMN_SOURCE = 1
@@ -23,6 +24,7 @@ class DiagnosticsPanel(QtWidgets.QWidget):
         super().__init__(parent)
         self._report = None
         self._items = ()
+        self._empty_message = "暂无诊断"
         self._redactor = redactor or (lambda value: value)
 
         self.setObjectName("diagnostics_panel")
@@ -67,6 +69,20 @@ class DiagnosticsPanel(QtWidgets.QWidget):
         self.clear_search_button.setToolTip("清空搜索条件")
         filter_row.addWidget(self.clear_search_button)
 
+        self.check_button = QtWidgets.QPushButton("运行检查", self)
+        self.check_button.setObjectName("diagnostics_check_button")
+        self.check_button.setAccessibleName("运行模型检查")
+        self.check_button.setToolTip("手动检查当前版本的状态机")
+        self.check_button.setEnabled(False)
+        filter_row.addWidget(self.check_button)
+
+        self.empty_label = QtWidgets.QLabel(self._empty_message, self)
+        self.empty_label.setObjectName("diagnostics_empty_label")
+        self.empty_label.setAccessibleName("诊断空状态")
+        self.empty_label.setAlignment(QtCore.Qt.AlignCenter)
+        self.empty_label.setStyleSheet("color: #666666; padding: 6px;")
+        layout.addWidget(self.empty_label)
+
         self.table = QtWidgets.QTableWidget(self)
         self.table.setObjectName("diagnostics_table")
         self.table.setAccessibleName("诊断列表")
@@ -77,21 +93,24 @@ class DiagnosticsPanel(QtWidgets.QWidget):
         self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
         self.table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setStretchLastSection(False)
         self.table.horizontalHeader().setSectionResizeMode(
             self.COLUMN_MESSAGE, QtWidgets.QHeaderView.Stretch
         )
-        for column in (
-            self.COLUMN_SEVERITY,
-            self.COLUMN_SOURCE,
-            self.COLUMN_CODE,
-            self.COLUMN_LOCATION,
-            self.COLUMN_ACTION,
-        ):
+        for column in (self.COLUMN_SEVERITY, self.COLUMN_SOURCE, self.COLUMN_ACTION):
             self.table.horizontalHeader().setSectionResizeMode(
                 column, QtWidgets.QHeaderView.ResizeToContents
             )
+        for column, width in (
+            (self.COLUMN_CODE, 210),
+            (self.COLUMN_LOCATION, 105),
+        ):
+            self.table.horizontalHeader().setSectionResizeMode(
+                column, QtWidgets.QHeaderView.Interactive
+            )
+            self.table.setColumnWidth(column, width)
         layout.addWidget(self.table, 2)
 
         self.detail = QtWidgets.QPlainTextEdit(self)
@@ -121,8 +140,12 @@ class DiagnosticsPanel(QtWidgets.QWidget):
         self.source_filter.currentIndexChanged.connect(self._refresh)
         self.search_edit.textChanged.connect(self._refresh)
         self.clear_search_button.clicked.connect(self.search_edit.clear)
+        self.check_button.clicked.connect(self.check_requested)
         self.table.itemSelectionChanged.connect(self._update_detail)
         self.table.cellDoubleClicked.connect(self._locate_row)
+
+    def set_check_enabled(self, enabled):
+        self.check_button.setEnabled(bool(enabled))
 
     @property
     def selected_item(self):
@@ -136,11 +159,13 @@ class DiagnosticsPanel(QtWidgets.QWidget):
             self._report = None
         elif report.matches(source_revision, dependency_fingerprint):
             self._report = report
+            self._empty_message = "当前筛选条件下没有诊断"
         else:
             self._report = None
         self._refresh()
 
-    def clear(self):
+    def clear(self, message="当前版本未发现问题"):
+        self._empty_message = message
         self.set_report(None, 0, None)
 
     def set_redactor(self, redactor):
@@ -165,6 +190,8 @@ class DiagnosticsPanel(QtWidgets.QWidget):
         else:
             self._items = self._report.select(self._query())
         self.table.setRowCount(len(self._items))
+        self.empty_label.setText(self._empty_message)
+        self.empty_label.setVisible(not self._items)
         for row, item in enumerate(self._items):
             values = (
                 item.severity or "",

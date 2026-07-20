@@ -15,6 +15,7 @@ from pathlib import Path
 
 from PyQt5 import QtCore, QtGui, QtTest, QtWidgets
 
+from app.application.task_runner import TaskStatus
 from app.model.session import ValidationState
 from app.source import SourceDocument
 from app.utils.application_font import (
@@ -135,10 +136,12 @@ def _press(button):
 
 def _keyboard_replace(editor, text):
     editor.setFocus(QtCore.Qt.TabFocusReason)
-    QtWidgets.QApplication.clipboard().setText(text)
     QtTest.QTest.keyClick(editor, QtCore.Qt.Key_A, QtCore.Qt.ControlModifier)
     QtTest.QTest.keyClick(editor, QtCore.Qt.Key_Backspace)
-    QtTest.QTest.keyClick(editor, QtCore.Qt.Key_V, QtCore.Qt.ControlModifier)
+    if text:
+        event = QtGui.QInputMethodEvent()
+        event.setCommitString(str(text))
+        QtWidgets.QApplication.sendEvent(editor, event)
 
 
 def _select_combo_data(combo, value):
@@ -346,6 +349,19 @@ def _schedule_state_name_dialog(name):
     QtCore.QTimer.singleShot(0, submit)
 
 
+def _select_state_field(field, value):
+    if isinstance(field, QtWidgets.QComboBox):
+        for index in range(field.count()):
+            data = field.itemData(index)
+            candidate = getattr(data, "name", data)
+            if candidate == value or field.itemText(index) == value:
+                field.setCurrentIndex(index)
+                return True
+        return False
+    _keyboard_replace(field, value)
+    return True
+
+
 def _schedule_transition_dialog(source, target, condition="", action=""):
     attempts = [0]
     filled = [False]
@@ -358,8 +374,10 @@ def _schedule_transition_dialog(source, target, condition="", action=""):
             button = getattr(widget, "button_accept", None)
             if source_field is not None and target_field is not None and widget.isVisible():
                 if not filled[0]:
-                    _keyboard_replace(source_field, source)
-                    _keyboard_replace(target_field, target)
+                    if not _select_state_field(source_field, source):
+                        raise RuntimeError("source state is missing from selector: " + source)
+                    if not _select_state_field(target_field, target):
+                        raise RuntimeError("target state is missing from selector: " + target)
                     _keyboard_replace(widget.edit_condition, condition)
                     _keyboard_replace(widget.edit_op, action)
                     filled[0] = True
@@ -899,10 +917,7 @@ class AcceptanceDriver(object):
 
     @staticmethod
     def _keyboard_text(widget, value):
-        widget.setFocus(QtCore.Qt.TabFocusReason)
-        QtTest.QTest.keySequence(widget, QtGui.QKeySequence.SelectAll)
-        QtTest.QTest.keyClick(widget, QtCore.Qt.Key_Backspace)
-        QtTest.QTest.keyClicks(widget, str(value))
+        _keyboard_replace(widget, str(value))
 
     def _wait_until(self, predicate, timeout_ms=3000):
         deadline = time.time() + timeout_ms / 1000.0
@@ -1620,7 +1635,10 @@ class AcceptanceDriver(object):
         _wait_signal(
             self.window.document_validation_finished,
             restore_valid,
-            accept=self._is_current_validation,
+            accept=lambda result: (
+                self._is_current_validation(result)
+                and editor.toPlainText() == _SOURCE
+            ),
         )
         if self.window.document_session.current_valid_snapshot is None:
             raise RuntimeError("valid source recovery did not restore snapshot")
@@ -1905,8 +1923,13 @@ class AcceptanceDriver(object):
         session = self.window.document_session
         return bool(
             session is not None
+            and result.status is TaskStatus.SUCCESS
             and result.stamp.session_id == session.session_id
             and result.stamp.source_revision == session.source_revision
+            and result.value is not None
+            and result.value.session_id == session.session_id
+            and result.value.source_revision == session.source_revision
+            and result.value.source_text == session.source_text
         )
 
     def simulation(self, use_shortcut=True):
@@ -2343,8 +2366,10 @@ class AcceptanceDriver(object):
             )
             dialog.show()
             self.app.processEvents()
-            self._keyboard_text(dialog.edit_source_state, "Idle")
-            self._keyboard_text(dialog.edit_target_state, "Running")
+            if not _select_state_field(dialog.edit_source_state, "Idle"):
+                raise RuntimeError("Idle is missing from the source-state selector")
+            if not _select_state_field(dialog.edit_target_state, "Running"):
+                raise RuntimeError("Running is missing from the target-state selector")
             if kind == "guard":
                 self._keyboard_text(dialog.edit_op, "count = count + 1;")
                 other_token = dialog.effect_formula_editor.pending_request.request_token

@@ -96,6 +96,34 @@ def test_diagnostics_panel_filters_by_severity_source_and_search(qtbot):
 
     panel.search_edit.setText("dead")
     assert panel.table.rowCount() == 0
+    assert panel.empty_label.text() == "当前筛选条件下没有诊断"
+
+
+def test_diagnostics_panel_empty_state_and_action_column_fit_compact_width(qtbot):
+    panel = DiagnosticsPanel()
+    qtbot.addWidget(panel)
+    panel.resize(724, 560)
+    panel.show()
+    panel.clear("当前版本未发现问题")
+
+    assert panel.empty_label.isVisibleTo(panel)
+    assert panel.empty_label.text() == "当前版本未发现问题"
+
+    item = _item(
+        DiagnosticSourceKind.MODEL,
+        "A long diagnostic message that should use the stretch column",
+        severity="error",
+        code="E_A_VERY_LONG_DIAGNOSTIC_CODE",
+        span=DiagnosticSpan(8, 2),
+    )
+    panel.set_report(_report(item), source_revision=3, dependency_fingerprint="deps-3")
+    qtbot.wait(10)
+
+    action = panel.table.cellWidget(0, panel.COLUMN_ACTION)
+    assert action.isVisibleTo(panel)
+    assert panel.table.visualRect(panel.table.model().index(0, panel.COLUMN_ACTION)).right() <= (
+        panel.table.viewport().width()
+    )
 
 
 def test_diagnostics_panel_emits_locate_signal_from_button_and_double_click(qtbot):

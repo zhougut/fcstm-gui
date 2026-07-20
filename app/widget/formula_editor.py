@@ -21,6 +21,7 @@ class FormulaEditor(QtWidgets.QWidget):
         service=None,
         debounce_ms=300,
         allow_empty=False,
+        enable_dialog=False,
         parent=None,
     ):
         super().__init__(parent or field.parentWidget())
@@ -32,15 +33,46 @@ class FormulaEditor(QtWidgets.QWidget):
         )
         self._service = service or FormulaValidationService()
         self._allow_empty = bool(allow_empty)
+        self._debounce_ms = int(debounce_ms)
         self._request_sequence = 0
         self.pending_request = None
         self.last_result = None
 
         self.setObjectName("{}_formula_editor".format(self.kind.value))
+        if isinstance(field, QtWidgets.QLineEdit):
+            self.setSizePolicy(
+                QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed
+            )
+        else:
+            self.setSizePolicy(
+                QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding
+            )
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(3)
-        layout.addWidget(field)
+        self.edit_button = None
+        if enable_dialog:
+            field_layout = QtWidgets.QHBoxLayout()
+            field_layout.setContentsMargins(0, 0, 0, 0)
+            field_layout.setSpacing(6)
+            field_layout.addWidget(field, 1, QtCore.Qt.AlignTop)
+            action_kind = self.kind in (FormulaKind.EFFECT, FormulaKind.LIFECYCLE)
+            self.edit_button = QtWidgets.QPushButton(
+                "编辑动作…" if action_kind else "编辑公式…", self
+            )
+            self.edit_button.setObjectName(
+                "open_{}_formula_editor".format(self.kind.value)
+            )
+            self.edit_button.setAccessibleName(
+                "打开{}完整编辑器".format("动作" if action_kind else "公式")
+            )
+            self.edit_button.setToolTip("打开带 FCSTM 校验和渲染预览的编辑器")
+            self.edit_button.setMinimumWidth(92)
+            self.edit_button.clicked.connect(self.open_dialog)
+            field_layout.addWidget(self.edit_button, 0, QtCore.Qt.AlignTop)
+            layout.addLayout(field_layout)
+        else:
+            layout.addWidget(field)
         self.status_label = QtWidgets.QLabel(self)
         self.status_label.setObjectName("formula_validation_status")
         self.status_label.setAccessibleName("公式校验状态")
@@ -69,6 +101,32 @@ class FormulaEditor(QtWidgets.QWidget):
         if isinstance(self.field, QtWidgets.QLineEdit):
             return self.field.text()
         return self.field.toPlainText()
+
+    def set_text(self, text):
+        if isinstance(self.field, QtWidgets.QLineEdit):
+            self.field.setText(text)
+        else:
+            self.field.setPlainText(text)
+
+    def open_dialog(self):
+        from .dialog_formula import DialogFormulaEditor
+
+        dialog = DialogFormulaEditor(
+            self.window(),
+            initial_text=self.text(),
+            kind=self.kind,
+            revision_provider=self._revision_provider,
+            variable_definitions_provider=self._variable_definitions_provider,
+            service=self._service,
+            debounce_ms=self._debounce_ms,
+            allow_empty=self._allow_empty,
+        )
+        if dialog.exec_() != QtWidgets.QDialog.Accepted:
+            return False
+        self.set_text(dialog.formula_text())
+        self.validate_now()
+        self.field.setFocus(QtCore.Qt.OtherFocusReason)
+        return True
 
     def _schedule_validation(self, *unused):
         self._request_sequence += 1

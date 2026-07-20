@@ -5,6 +5,7 @@ from PyQt5.QtCore import Qt
 from ..ui import UIDialogEditState
 from typing import Optional
 from ..model import State, StateManager
+from .state_selector import populate_state_combo, selected_state
 
 class DialogEditState(QDialog, UIDialogEditState):
     def __init__(self, parent, state_manager: StateManager,
@@ -12,7 +13,7 @@ class DialogEditState(QDialog, UIDialogEditState):
                  parent_state: Optional[State] = None):
         QDialog.__init__(self, parent)
         self.setupUi(self)
-        self.setFixedSize(self.width(), self.height())
+        self.setMinimumSize(self.size())
 
         self.is_edit = is_edit
         self.initial_data = initial_data
@@ -28,8 +29,20 @@ class DialogEditState(QDialog, UIDialogEditState):
         self._init_button_reject()
 
     def _init_ui(self):
+        populate_state_combo(
+            self.combo_parent_state,
+            self.state_manager,
+            selected_state=(
+                self.initial_data.parent
+                if self.is_edit and self.initial_data is not None
+                else self.parent_state
+            ),
+            include_root_choice=self.state_manager.root_state is None,
+        )
         if self.is_edit:
             self.setWindowTitle("修改状态名称")
+            self.combo_parent_state.setEnabled(False)
+            self.combo_parent_state.setToolTip("修改状态名称时不移动所属层级")
             if self.initial_data:
                 # 预填充内容
                 self.edit_state_name.setText(self.initial_data.name)
@@ -45,6 +58,8 @@ class DialogEditState(QDialog, UIDialogEditState):
             QtWidgets.QMessageBox.warning(self, "错误", "状态名不能为空！")
             return
         
+        chosen_parent = self.get_parent_state()
+
         # 检查同一父状态下是否有重复名称
         if self.is_edit:
             # 编辑状态：检查同一父状态下是否有其他同名状态
@@ -55,9 +70,9 @@ class DialogEditState(QDialog, UIDialogEditState):
                     return
         else:
             # 添加状态：检查指定父状态下是否已有同名子状态
-            if self.parent_state:
-                if self.parent_state.find_child_by_name(state_name):
-                    QtWidgets.QMessageBox.warning(self, "错误", f"父状态 '{self.parent_state.name}' 下已存在名为 '{state_name}' 的子状态！")
+            if chosen_parent:
+                if chosen_parent.find_child_by_name(state_name):
+                    QtWidgets.QMessageBox.warning(self, "错误", f"父状态 '{chosen_parent.name}' 下已存在名为 '{state_name}' 的子状态！")
                     return
             else:
                 # 添加根状态：检查是否已有根状态
@@ -73,3 +88,8 @@ class DialogEditState(QDialog, UIDialogEditState):
     def get_state_name(self) -> str:
         name = self.edit_state_name.text()
         return name
+
+    def get_parent_state(self) -> Optional[State]:
+        if self.is_edit and self.initial_data is not None:
+            return self.initial_data.parent
+        return selected_state(self.combo_parent_state)

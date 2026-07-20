@@ -27,6 +27,28 @@ state Root {
 
 
 @pytest.mark.unittest
+def test_document_version_groups_unsaved_source_revisions(tmp_path):
+    path = tmp_path / "versioned.fcstm"
+    path.write_text(VALID_SOURCE, encoding="utf-8")
+    service = DocumentService()
+    clean = service.load(path)
+
+    first = service.prepare_source_text(clean, VALID_SOURCE + "\n// first")
+    second = service.prepare_source_text(first, VALID_SOURCE + "\n// second")
+
+    assert (clean.source_revision, clean.document_version) == (0, 0)
+    assert (first.source_revision, first.document_version) == (1, 1)
+    assert (second.source_revision, second.document_version) == (2, 1)
+
+    saved = second.mark_saved()
+    third = service.prepare_source_text(saved, VALID_SOURCE + "\n// third")
+
+    assert not saved.dirty
+    assert (saved.source_revision, saved.document_version) == (2, 1)
+    assert (third.source_revision, third.document_version) == (3, 2)
+
+
+@pytest.mark.unittest
 def test_load_valid_document_builds_one_revision_snapshot(tmp_path):
     path = tmp_path / "valid.fcstm"
     path.write_bytes(VALID_SOURCE.encode("utf-8"))

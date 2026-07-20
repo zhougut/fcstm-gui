@@ -8,6 +8,7 @@ from .dynamic_validation_workspace import DynamicValidationWorkspace
 from .simulation_workspace import SimulationWorkspace
 from .dialog_export import DialogExport
 from .dialog_numeric_formula import DialogNumericFormula
+from .dialog_formula import DialogFormulaEditor
 from .graph_workspace import GraphWorkspace
 
 __all__ = [
@@ -17,6 +18,7 @@ __all__ = [
     "DialogCodeGen",
     "DialogExport",
     "DialogNumericFormula",
+    "DialogFormulaEditor",
     "DynamicValidationWorkspace",
     "FormulaEditor",
     "GraphWorkspace",

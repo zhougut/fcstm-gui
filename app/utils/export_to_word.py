@@ -1,87 +1,209 @@
-from docx import Document
-from docx.shared import Pt
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-import os
 from pathlib import Path
+
+from docx import Document
+from docx.enum.section import WD_ORIENT
+from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
+from docx.shared import Inches, Pt
 
 from ..model import StateManager
 from .ui_to_dsl import format_transition_item, state_manager_to_dsl
 from pyfcstm.dsl import parse_with_grammar_entry
 from pyfcstm.model import parse_dsl_node_to_state_machine
 
-def center_text_in_cell(cell):
+
+def _set_cell(cell, value, *, bold=False, centered=False):
+    cell.text = "" if value is None else str(value)
+    cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
     for paragraph in cell.paragraphs:
-        paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        if centered:
+            paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        for run in paragraph.runs:
+            run.bold = bold
+            run.font.name = "宋体"
+            run.font.size = Pt(9)
+            run._element.rPr.rFonts.set(qn("w:eastAsia"), "宋体")
+
+
+def _shade_cell(cell, fill="D9EAF7"):
+    properties = cell._tc.get_or_add_tcPr()
+    shading = OxmlElement("w:shd")
+    shading.set(qn("w:fill"), fill)
+    properties.append(shading)
+
+
+def _set_header(row, values):
+    for cell, value in zip(row.cells, values):
+        _set_cell(cell, value, bold=True, centered=True)
+        _shade_cell(cell)
+
+
+def _lifecycle_text(state, lifecycle_type):
+    lines = []
+    for item in state.lifecycle:
+        if item.get("type") != lifecycle_type:
+            continue
+        if item.get("is_abstract"):
+            text = "abstract {}".format(item.get("name", "")).strip()
+        else:
+            parts = []
+            if item.get("name"):
+                parts.append(str(item["name"]))
+            if item.get("action"):
+                parts.append(str(item["action"]))
+            text = "\n".join(parts)
+        if item.get("comment"):
+            text = "{}\n// {}".format(text, item["comment"]).strip()
+        lines.append(text)
+    return "\n\n".join(lines)
+
+
+def _transition_type(transition):
+    source = str(transition.get("source", "")).strip()
+    target = str(transition.get("target", "")).strip()
+    if source.startswith("!"):
+        return "强制迁移"
+    if source == "[*]":
+        return "初始迁移"
+    if target == "[*]":
+        return "终止迁移"
+    return "普通迁移"
+
 
 def export_statechart_to_word(state_manager: StateManager, file_path: str):
-    """
-    将状态机信息导出为Word文档
-    Args:
-        state_manager: 状态管理器对象
-        file_path: 导出文件路径
-    """
-    # 1. StateManager转DSL
+    """将状态机整体信息导出为状态机、状态和迁移三张 Word 表格。"""
+    if state_manager is None or state_manager.root_state is None:
+        raise ValueError("状态机为空，无法导出 Word 文档")
+
+    # 保留完整 DSL 校验边界，避免把不一致的界面投影导出为正式文档。
     dsl_content = state_manager_to_dsl(state_manager)
-    # 2. DSL转StateMachine
-    ast_node = parse_with_grammar_entry(dsl_content, entry_name='state_machine_dsl')
-    state_machine = parse_dsl_node_to_state_machine(ast_node)
-    # 3. 创建Word文档
-    doc = Document()
-    # 状态机整体信息表格
-    table = doc.add_table(rows=4, cols=2)
-    table.style = 'Table Grid'
-    table.cell(0, 0).text = "状态机名称"
-    table.cell(0, 1).text = Path(file_path).stem
-    table.cell(1, 0).text = "变量定义"
-    var_defs = state_manager.variable_definitions
-    table.cell(1, 1).text = var_defs
-    table.cell(2, 0).text = "状态数"
-    table.cell(2, 1).text = str(len(list(state_machine.walk_states())))
-    table.cell(3, 0).text = "转移数"
-    trans_count = sum(len(s.transitions) for s in state_machine.walk_states() if s.transitions)
-    table.cell(3, 1).text = str(trans_count)
-    for row in table.rows:
-        for cell in row.cells:
-            center_text_in_cell(cell)
-    doc.add_paragraph()
-    # 每个状态单独一个表格
-    for state in state_machine.walk_states():
-        s_table = doc.add_table(rows=8, cols=2)
-        s_table.style = 'Table Grid'
-        s_table.cell(0, 0).text = "状态名称"
-        s_table.cell(0, 1).text = state.name
-        s_table.cell(1, 0).text = "父状态"
-        model_state = state_manager.get_state_by_path(".".join(state.path))
-        state_parent = model_state.parent if model_state is not None else None
-        s_table.cell(1, 1).text = state_parent.name if state_parent is not None else "无"
-        s_table.cell(2, 0).text = "子状态数"
-        s_table.cell(2, 1).text = str(len(state.substate_name_to_id))
-        s_table.cell(3, 0).text = "类型"
-        s_table.cell(3, 1).text = "复合状态" if len(state.substate_name_to_id) > 0 else "简单状态"
-        # 生命周期
-        s_table.cell(4, 0).text = "进入(enter)"
-        s_table.cell(4, 1).text = '\n'.join(
-            [f"abstract {e.name}" if getattr(e, 'is_abstract', False) else '\n'.join(f"{op.var_name} = {op.expr}" for op in getattr(e, 'operations', [])) for e in getattr(state, 'on_enters', [])]
+    ast_node = parse_with_grammar_entry(
+        dsl_content, entry_name="state_machine_dsl"
+    )
+    parse_dsl_node_to_state_machine(ast_node)
+
+    states = state_manager.get_all_states()
+    transitions = [
+        (state, transition)
+        for state in states
+        for transition in state.transitions
+    ]
+    forced_count = sum(
+        str(transition.get("source", "")).strip().startswith("!")
+        for _, transition in transitions
+    )
+    variable_lines = [
+        line.strip()
+        for line in state_manager.variable_definitions.splitlines()
+        if line.strip()
+    ]
+    maximum_level = max(
+        (len(state.get_full_path().split(".")) for state in states),
+        default=0,
+    )
+
+    document = Document()
+    section = document.sections[0]
+    section.orientation = WD_ORIENT.LANDSCAPE
+    section.page_width, section.page_height = (
+        section.page_height,
+        section.page_width,
+    )
+    section.left_margin = Inches(0.5)
+    section.right_margin = Inches(0.5)
+
+    title = document.add_heading("状态机导出报告", level=0)
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    document.add_heading("一、状态机表格", level=1)
+    summary_rows = (
+        ("状态机名称", state_manager.root_state.name),
+        ("根状态路径", state_manager.root_state.get_full_path()),
+        ("导出文件", Path(file_path).name),
+        ("变量定义", state_manager.variable_definitions),
+        ("变量定义数", len(variable_lines)),
+        ("状态总数", len(states)),
+        ("迁移总数", len(transitions)),
+        ("普通/初始/终止迁移数", len(transitions) - forced_count),
+        ("强制迁移数", forced_count),
+        ("最大状态层级", maximum_level),
+    )
+    machine_table = document.add_table(rows=len(summary_rows), cols=2)
+    machine_table.style = "Table Grid"
+    for row, (label, value) in zip(machine_table.rows, summary_rows):
+        _set_cell(row.cells[0], label, bold=True, centered=True)
+        _shade_cell(row.cells[0])
+        _set_cell(row.cells[1], value)
+
+    document.add_paragraph()
+    document.add_heading("二、状态表格", level=1)
+    state_headers = (
+        "序号",
+        "状态路径",
+        "状态名称",
+        "父状态",
+        "状态类型",
+        "子状态数",
+        "进入动作",
+        "执行中动作",
+        "退出动作",
+    )
+    state_table = document.add_table(rows=1, cols=len(state_headers))
+    state_table.style = "Table Grid"
+    _set_header(state_table.rows[0], state_headers)
+    for index, state in enumerate(states, 1):
+        row = state_table.add_row()
+        values = (
+            index,
+            state.get_full_path(),
+            state.name,
+            state.parent.get_full_path() if state.parent is not None else "无",
+            "复合状态" if state.children else "简单状态",
+            len(state.children),
+            _lifecycle_text(state, "enter"),
+            _lifecycle_text(state, "during"),
+            _lifecycle_text(state, "exit"),
         )
-        s_table.cell(5, 0).text = "执行中(during)"
-        s_table.cell(5, 1).text = '\n'.join(
-            [f"abstract {d.name}" if getattr(d, 'is_abstract', False) else '\n'.join(f"{op.var_name} = {op.expr}" for op in getattr(d, 'operations', [])) for d in getattr(state, 'on_durings', [])]
+        for column, value in enumerate(values):
+            _set_cell(row.cells[column], value, centered=column in {0, 2, 4, 5})
+
+    document.add_paragraph()
+    document.add_heading("三、迁移表格", level=1)
+    transition_headers = (
+        "序号",
+        "所属状态",
+        "迁移类型",
+        "源状态",
+        "目标状态",
+        "事件",
+        "条件",
+        "动作",
+        "完整定义",
+    )
+    transition_table = document.add_table(
+        rows=1, cols=len(transition_headers)
+    )
+    transition_table.style = "Table Grid"
+    _set_header(transition_table.rows[0], transition_headers)
+    for index, (state, transition) in enumerate(transitions, 1):
+        definition = format_transition_item(transition).strip()
+        if definition and not definition.endswith(";"):
+            definition += ";"
+        row = transition_table.add_row()
+        values = (
+            index,
+            state.get_full_path(),
+            _transition_type(transition),
+            transition.get("source", ""),
+            transition.get("target", ""),
+            transition.get("event", ""),
+            transition.get("condition", ""),
+            transition.get("action", ""),
+            definition,
         )
-        s_table.cell(6, 0).text = "退出(exit)"
-        s_table.cell(6, 1).text = '\n'.join(
-            [f"abstract {x.name}" if getattr(x, 'is_abstract', False) else '\n'.join(f"{op.var_name} = {op.expr}" for op in getattr(x, 'operations', [])) for x in getattr(state, 'on_exits', [])]
-        )
-        # 转移
-        s_table.cell(7, 0).text = "转移"
-        transitions = []
-        if model_state is not None:
-            for transition in model_state.transitions:
-                transition_text = format_transition_item(transition)
-                if transition_text:
-                    transitions.append(f"{transition_text};")
-        s_table.cell(7, 1).text = "\n".join(transitions)
-        for row in s_table.rows:
-            for cell in row.cells:
-                center_text_in_cell(cell)
-        doc.add_paragraph()
-    doc.save(file_path)
+        for column, value in enumerate(values):
+            _set_cell(row.cells[column], value, centered=column in {0, 2})
+
+    document.save(file_path)

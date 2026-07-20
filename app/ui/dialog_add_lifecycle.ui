@@ -29,9 +29,9 @@
      </property>
      <layout class="QGridLayout" name="gridLayout">
       <property name="horizontalSpacing">
-       <number>0</number>
+       <number>10</number>
       </property>
-      <item row="0" column="1">
+      <item row="1" column="1">
        <widget class="QComboBox" name="combo_type">
         <property name="sizePolicy">
          <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
@@ -78,7 +78,7 @@
         </item>
        </widget>
       </item>
-      <item row="2" column="1">
+      <item row="3" column="1">
        <widget class="QComboBox" name="combo_abstract">
         <property name="maximumSize">
          <size>
@@ -104,7 +104,7 @@
         </item>
        </widget>
       </item>
-      <item row="4" column="1">
+      <item row="5" column="1">
        <widget class="QTextEdit" name="edit_annotation">
         <property name="font">
          <font>
@@ -114,7 +114,7 @@
         </property>
        </widget>
       </item>
-      <item row="3" column="1">
+      <item row="4" column="1">
        <widget class="QTextEdit" name="edit_op">
         <property name="font">
          <font>
@@ -124,7 +124,7 @@
         </property>
        </widget>
       </item>
-      <item row="2" column="0">
+      <item row="3" column="0">
        <widget class="QLabel" name="label_abstract">
         <property name="font">
          <font>
@@ -140,7 +140,7 @@
         </property>
        </widget>
       </item>
-      <item row="3" column="0">
+      <item row="4" column="0">
        <widget class="QLabel" name="label_op">
         <property name="font">
          <font>
@@ -156,7 +156,7 @@
         </property>
        </widget>
       </item>
-      <item row="0" column="0">
+      <item row="1" column="0">
        <widget class="QLabel" name="label_type">
         <property name="font">
          <font>
@@ -172,7 +172,7 @@
         </property>
        </widget>
       </item>
-      <item row="4" column="0">
+      <item row="5" column="0">
        <widget class="QLabel" name="label">
         <property name="font">
          <font>
@@ -188,7 +188,7 @@
         </property>
        </widget>
       </item>
-      <item row="1" column="0">
+      <item row="2" column="0">
        <widget class="QLabel" name="label_name">
         <property name="font">
          <font>
@@ -204,8 +204,34 @@
         </property>
        </widget>
       </item>
-      <item row="1" column="1">
+      <item row="2" column="1">
        <widget class="QLineEdit" name="edit_name">
+        <property name="font">
+         <font>
+          <family>微软雅黑</family>
+          <pointsize>11</pointsize>
+         </font>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="0">
+       <widget class="QLabel" name="label_owner_state">
+        <property name="font">
+         <font>
+          <family>微软雅黑</family>
+          <pointsize>11</pointsize>
+         </font>
+        </property>
+        <property name="text">
+         <string>所属状态</string>
+        </property>
+        <property name="alignment">
+         <set>Qt::AlignCenter</set>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QComboBox" name="combo_owner_state">
         <property name="font">
          <font>
           <family>微软雅黑</family>

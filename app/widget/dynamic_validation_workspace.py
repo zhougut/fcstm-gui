@@ -35,6 +35,8 @@ class DynamicValidationWorkspace(QtWidgets.QWidget):
         self._document_available = False
         self._busy = False
         self._report = None
+        self._report_payload = None
+        self._document_stamp = None
         self._build_ui(case_ids)
         self._connect_signals()
         self._update_actions()
@@ -151,10 +153,22 @@ class DynamicValidationWorkspace(QtWidgets.QWidget):
     def report(self):
         return self._report
 
-    def set_document_available(self, available):
+    def set_document_available(self, available, revision=None, fingerprint=None):
+        stamp = (revision, fingerprint) if available else None
+        invalidated_report = (
+            stamp != self._document_stamp and self._report is not None
+        )
+        if invalidated_report:
+            self._report = None
+            self._report_payload = None
+            self.result_table.setRowCount(0)
+            self.details_edit.clear()
+        self._document_stamp = stamp
         self._document_available = bool(available)
         if not available:
             self.status_label.setText("当前版本无有效快照")
+        elif invalidated_report:
+            self.status_label.setText("模型版本已变化，请重新运行动态验证")
         elif self._report is None:
             self.status_label.setText(_STATUS_LABELS["draft"])
         self._update_actions()

@@ -424,6 +424,15 @@ def test_path_redactor_does_not_replace_a_sibling_with_the_same_prefix(tmp_path)
     )
 
 
+def test_path_redactor_redacts_percent_encoded_file_uri(tmp_path):
+    workspace = tmp_path / "中文 workspace"
+    redactor = PathRedactor(workspace=str(workspace))
+
+    source_uri = (workspace / "models" / "example.fcstm").as_uri()
+
+    assert redactor.redact_text(source_uri) == "<WORKSPACE>/models/example.fcstm"
+
+
 def test_default_history_redacts_artifact_and_exception_paths(tmp_path):
     home = tmp_path / "home"
     workspace = home / "project"

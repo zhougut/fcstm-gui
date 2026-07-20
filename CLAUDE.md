@@ -354,10 +354,53 @@ always expose the same contract.
   an I/O load failure. Test failed-load session preservation with a real read
   failure after file-dialog acceptance, and assert the original session,
   manager, source, revision, and workspace remain installed.
+- When an invalid source revision keeps the last valid model visible, every
+  derived projection reader must gate on `current_valid_snapshot`. Preserve the
+  visible state/tree data, but clear or disable revision-bound event, action,
+  export, simulation, and reference projections instead of querying them with
+  the invalid session.
 - Layout membership does not prove non-overlap. Inspect mapped widget rectangles
   at runtime; in particular, Qt5 combo size-adjust policies can exceed a nested
   layout allocation under offscreen rendering unless width policy and spacing
   are explicit.
+- A completion signal can carry a cancelled result with the same session and
+  revision as the current document when rapid edits supersede equivalent task
+  attempts. Acceptance waits for validation must require successful status and
+  a value whose session, revision, and exact source text all match the UI.
+- Windows can temporarily refuse `OleSetClipboard` during a long native GUI
+  run, turning a synthetic paste into an empty edit. Acceptance text replacement
+  must select and delete through key events, commit the replacement through a
+  Qt input-method event, and wait for the exact target text instead of depending
+  on the process-global system clipboard.
+- `QTest.keyClicks` only maps its ASCII key table and can assert-abort a native
+  run when an acceptance artifact path contains Chinese characters. Route all
+  field replacement, including absolute generation/export paths, through the
+  Unicode-safe input-method helper rather than assuming the workspace is ASCII.
+- Native-path redaction does not automatically redact percent-encoded `file:`
+  URIs. Add each configured root's canonical URI form to the same redaction
+  boundary so property inspectors, diagnostic details, and tooltips cannot
+  reveal the workspace through an alternate representation.
+- A dock's minimum width does not provide a usable central workspace: content
+  size hints can let both side docks consume half of a 1280x720 window. Apply a
+  reviewed one-time initial dock split, preserve later user resizing, and assert
+  the resulting central-tab width in a shown native window.
+- Revision-bound views must invalidate their presented content when the source
+  stamp changes. In particular, clear an old graph scene and dynamic-validation
+  report, disable actions that operate on those results, and show a rerun or
+  refresh empty state instead of leaving stale pixels that appear current.
+- Diagnostics need an initial column budget at the supported compact viewport.
+  Keep code and location columns user-resizable but bounded initially, stretch
+  the message column, and prove that the row action is visible without horizontal
+  scrolling; also distinguish no findings from no filter matches.
+- Keep the user-facing document version separate from the internal source
+  revision used for stale-task guards. Increment the displayed version once on
+  the first edit after a save; further unsaved edits remain in that same
+  version while every distinct source change still receives a unique internal
+  revision.
+- Object-creation dialogs must constrain model references to selectors backed
+  by current model objects and show full state paths when names can repeat.
+  Preserve pseudo-state and forced-transition choices explicitly instead of
+  falling back to free-form state names.
 
 ## Required Local Evidence
 

@@ -22,6 +22,34 @@ class TestMainWindow:
         qtbot.addWidget(window)
         return window
 
+    def test_source_editor_uses_four_space_tab_width(self, window):
+        metrics = QtGui.QFontMetricsF(window.source_editor.font())
+        expected = metrics.horizontalAdvance(" ") * 4
+        assert abs(window.source_editor.tabStopDistance() - expected) < 0.5
+
+    def test_new_state_button_text_fits_compact_model_explorer(
+        self, qtbot, window
+    ):
+        qtbot.mouseClick(
+            window.button_initial_new_state_machine,
+            QtCore.Qt.LeftButton,
+        )
+        window.resize(1280, 720)
+        window.show()
+        QtWidgets.QApplication.processEvents()
+
+        text_width = window.button_add_state.fontMetrics().horizontalAdvance(
+            window.button_add_state.text()
+        )
+        assert window.button_add_state.text() == "新建状态"
+        assert window.button_add_state.width() >= text_width + 20
+        button_rect = window.button_add_state.rect()
+        visible_rect = window.button_add_state.visibleRegion().boundingRect()
+        assert visible_rect.contains(button_rect)
+        assert window.button_add_state.geometry().right() <= (
+            window.widget_state_add_state.contentsRect().right()
+        )
+
     def test_new_button_opens_editor_with_empty_state_manager(self, qtbot, window):
         assert window.stackedWidget_state_machine.currentIndex() == 0
         assert not hasattr(window, "state_manager")
@@ -423,6 +451,14 @@ state TrafficLight {
         )
         with qtbot.waitSignal(window.document_load_finished, timeout=3000):
             window._import_statechart()
+        window.workspace_tabs.setCurrentWidget(window.source_workspace)
+        original_manager = window.state_manager
+        critical_messages = []
+        monkeypatch.setattr(
+            QtWidgets.QMessageBox,
+            "critical",
+            lambda *args, **kwargs: critical_messages.append(args),
+        )
 
         with qtbot.waitSignal(window.document_validation_finished, timeout=3000):
             window.source_editor.setPlainText("state Broken {")
@@ -430,7 +466,9 @@ state TrafficLight {
         assert window.document_session.source_revision == 1
         assert window.document_session.validation_state is ValidationState.INVALID_SYNTAX
         assert window.document_session.last_valid_snapshot.source_revision == 0
-        assert window.state_manager is None
+        assert window.state_manager is original_manager
+        assert window.state_manager.root_state.name == "Root"
+        assert window.workspace_tabs.currentWidget() is window.source_workspace
         assert not window.action_graph_gen.isEnabled()
 
         fixed = "state Fixed { state A; [*] -> A; A -> [*]; }"
@@ -440,7 +478,75 @@ state TrafficLight {
         assert window.document_session.source_revision == 2
         assert window.document_session.validated_revision == 2
         assert window.state_manager.root_state.name == "Fixed"
+        assert window.workspace_tabs.currentWidget() is window.source_workspace
         assert window.action_graph_gen.isEnabled()
+        assert not critical_messages
+
+    def test_source_refresh_button_reports_invalid_source(
+        self, monkeypatch, qtbot, window, tmp_path
+    ):
+        source = tmp_path / "refresh.fcstm"
+        source.write_text(
+            "state Root { state A; [*] -> A; A -> [*]; }",
+            encoding="utf-8",
+        )
+        window._set_active_document_session(window.document_service.load(source))
+        window.workspace_tabs.setCurrentWidget(window.source_workspace)
+        warnings = []
+        monkeypatch.setattr(
+            QtWidgets.QMessageBox,
+            "warning",
+            lambda *args, **kwargs: warnings.append(args),
+        )
+
+        with qtbot.waitSignal(window.document_validation_finished, timeout=3000):
+            window.source_editor.setPlainText("state Broken {")
+        with qtbot.waitSignal(window.document_validation_finished, timeout=3000):
+            qtbot.mouseClick(
+                window.source_refresh_button, QtCore.Qt.LeftButton
+            )
+
+        assert warnings
+        assert warnings[-1][1] == "刷新失败"
+        assert "未通过完整校验" in warnings[-1][2]
+        assert window.state_manager.root_state.name == "Root"
+        assert window.workspace_tabs.currentWidget() is window.source_workspace
+
+    def test_variable_editor_commit_preserves_cursor_and_focus(
+        self, monkeypatch, qtbot, window, tmp_path
+    ):
+        source = tmp_path / "variables.fcstm"
+        source.write_text(
+            "def int a = 0;\nstate Root;",
+            encoding="utf-8",
+        )
+        window._set_active_document_session(window.document_service.load(source))
+        window.show()
+        window.edit_var_def.setFocus()
+        cursor = window.edit_var_def.textCursor()
+        cursor.movePosition(QtGui.QTextCursor.End)
+        cursor.insertText("\ndef int b = 1;")
+        window.edit_var_def.setTextCursor(cursor)
+        warnings = []
+        monkeypatch.setattr(
+            QtWidgets.QMessageBox,
+            "warning",
+            lambda *args, **kwargs: warnings.append(args),
+        )
+
+        qtbot.waitUntil(
+            lambda: window.document_session.source_revision == 1,
+            timeout=3000,
+        )
+
+        assert window.edit_var_def.textCursor().position() == len(
+            window.edit_var_def.toPlainText()
+        )
+        assert window.edit_var_def.hasFocus()
+        assert window.document_session.current_valid_snapshot is not None
+        assert window.edit_var_def.toPlainText().endswith("def int b = 1;")
+        assert not warnings
+        window.hide()
 
     def test_initially_invalid_source_can_be_repaired_and_validated(
         self, qtbot, window, tmp_path
@@ -484,7 +590,17 @@ state TrafficLight {
         with qtbot.waitSignal(window.document_validation_finished, timeout=3000):
             window.source_editor.setPlainText(changed)
 
+        assert window.document_session.document_version == 1
+        assert window.document_revision_label.text() == "版本 1"
+
+        changed = "// same unsaved version\nstate Root { state A; [*] -> A; A -> [*]; }\n"
+        with qtbot.waitSignal(window.document_validation_finished, timeout=3000):
+            window.source_editor.setPlainText(changed)
+
         assert window.document_session.dirty
+        assert window.document_session.source_revision == 2
+        assert window.document_session.document_version == 1
+        assert window.document_revision_label.text() == "版本 1"
         window._save_current_document()
 
         assert source.read_text(encoding="utf-8") == changed
@@ -1739,6 +1855,9 @@ state TrafficLight {
         )
         assert window.model_explorer_dock.isVisible()
         assert window.property_inspector_dock.isVisible()
+        assert window.workspace_tabs.width() >= 700
+        assert window.model_explorer_dock.width() <= 240
+        assert window.property_inspector_dock.width() <= 300
         assert window.tree_all_state.currentItem() is window.tree_all_state.topLevelItem(0)
         assert window.property_path_label.text() == "状态：Workbench"
         assert window.model_explorer_dock.isAncestorOf(window.tree_all_state)

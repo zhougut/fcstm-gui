@@ -97,13 +97,14 @@ def test_graph_toolbar_focusable_controls_do_not_overlap(qtbot, tmp_path):
         )
 
 
-def test_property_inspector_renders_redaction_marker_as_plain_text(qtbot, tmp_path):
+def test_property_inspector_renders_redacted_source_uri_as_plain_text(qtbot, tmp_path):
     window = _window(qtbot, tmp_path)
     root = window.state_manager.root_state
 
     window._update_property_inspector(root)
 
     assert window.property_source_label.textFormat() == QtCore.Qt.PlainText
+    assert "file:///" not in window.property_source_label.text()
     assert any(
         marker in window.property_source_label.text()
         for marker in ("<TEMP>", "<HOME>")
@@ -118,3 +119,24 @@ def test_graph_stale_state_is_not_presented_as_failure(qtbot, tmp_path):
 
     assert window.graph_panel.status_label.text().startswith("已失效：")
     assert not window.graph_panel.status_label.text().startswith("失败：")
+
+
+def test_graph_discards_rendered_scene_when_document_revision_changes(
+    qtbot, tmp_path
+):
+    window = _window(qtbot, tmp_path)
+    panel = window.graph_panel
+    image = QtGui.QImage(2, 2, QtGui.QImage.Format_ARGB32)
+    image.fill(QtGui.QColor("white"))
+    buffer = QtCore.QBuffer()
+    buffer.open(QtCore.QIODevice.WriteOnly)
+    assert image.save(buffer, "PNG")
+    png = bytes(buffer.data())
+    panel.present_png(png, revision=0)
+    assert panel.fit_button.isEnabled()
+
+    panel.set_available(True, revision=1, selected_path="Root")
+
+    assert not panel.fit_button.isEnabled()
+    assert "待刷新" in panel.status_label.text()
+    assert "尚未生成当前版本" in panel.view.scene().items()[0].toPlainText()

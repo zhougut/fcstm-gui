@@ -489,6 +489,7 @@ def update_ui_from_state_manager(main_window, state_manager: StateManager):
     def add_state_to_tree(state: MyState, parent_item=None):
         item = QtWidgets.QTreeWidgetItem([state.name])
         item.setData(0, Qt.UserRole, state)
+        item.setToolTip(0, state.get_full_path())
         
         if parent_item:
             parent_item.addChild(item)
