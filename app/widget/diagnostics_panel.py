@@ -67,14 +67,19 @@ class DiagnosticsPanel(QtWidgets.QWidget):
         self.clear_search_button.setObjectName("diagnostics_clear_search_button")
         self.clear_search_button.setAccessibleName("清空诊断搜索")
         self.clear_search_button.setToolTip("清空搜索条件")
-        filter_row.addWidget(self.clear_search_button)
 
         self.check_button = QtWidgets.QPushButton("运行检查", self)
         self.check_button.setObjectName("diagnostics_check_button")
         self.check_button.setAccessibleName("运行模型检查")
         self.check_button.setToolTip("手动检查当前版本的状态机")
         self.check_button.setEnabled(False)
-        filter_row.addWidget(self.check_button)
+
+        action_row = QtWidgets.QHBoxLayout()
+        action_row.setContentsMargins(0, 0, 0, 0)
+        action_row.addStretch(1)
+        action_row.addWidget(self.clear_search_button)
+        action_row.addWidget(self.check_button)
+        layout.addLayout(action_row)
 
         self.empty_label = QtWidgets.QLabel(self._empty_message, self)
         self.empty_label.setObjectName("diagnostics_empty_label")

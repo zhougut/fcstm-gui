@@ -1,4 +1,5 @@
 import json
+import os
 import time
 
 import pytest
@@ -431,6 +432,26 @@ def test_path_redactor_redacts_percent_encoded_file_uri(tmp_path):
     source_uri = (workspace / "models" / "example.fcstm").as_uri()
 
     assert redactor.redact_text(source_uri) == "<WORKSPACE>/models/example.fcstm"
+
+
+def test_path_redactor_resolves_filesystem_alias_before_uri_redaction(
+    tmp_path, monkeypatch
+):
+    alias = tmp_path / "alias-temp"
+    canonical = tmp_path / "canonical-temp"
+    original_realpath = os.path.realpath
+
+    def resolve_alias(value):
+        if os.path.normpath(value) == os.path.normpath(str(alias)):
+            return str(canonical)
+        return original_realpath(value)
+
+    monkeypatch.setattr(os.path, "realpath", resolve_alias)
+    redactor = PathRedactor(temp=str(alias))
+
+    assert redactor.redact_text((canonical / "model.fcstm").as_uri()) == (
+        "<TEMP>/model.fcstm"
+    )
 
 
 def test_default_history_redacts_artifact_and_exception_paths(tmp_path):

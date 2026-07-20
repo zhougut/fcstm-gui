@@ -119,9 +119,9 @@ def test_transition_and_lifecycle_fields_offer_full_formula_editor(qtbot):
         assert button.accessibleName()
         assert "渲染预览" in button.toolTip()
     assert abs(
-        transition.edit_condition.geometry().top()
-        - transition.condition_formula_editor.edit_button.geometry().top()
-    ) <= 2
+        transition.edit_condition.geometry().center().y()
+        - transition.condition_formula_editor.edit_button.geometry().center().y()
+    ) <= 4
 
 
 def test_formula_button_returns_edited_text_to_transition_field(

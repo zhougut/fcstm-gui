@@ -148,10 +148,14 @@ jobs:
             esac
           }
           mkdir -p evidence/source
-          # The native macOS runner can take over six minutes for the full
-          # GUI acceptance test; per-operation waits remain bounded inside
-          # the driver, so this is only the outer test-process budget.
-          run_gui python -m pytest test -q --timeout=600 --junitxml=evidence/source/pytest.xml 2>&1 | tee evidence/source/pytest.log
+          # The full acceptance driver is run below in fresh processes for
+          # every viewport/scale pair.  Do not nest that same 140-case driver
+          # inside pytest: re-entering a live native Qt application can crash
+          # XCB and can leak native file-dialog state on Windows.
+          run_gui python -m pytest test -q --timeout=600 \
+            --deselect=test/test_acceptance_check.py::test_full_gui_acceptance_writes_report \
+            --junitxml=evidence/source/pytest.xml \
+            2>&1 | tee evidence/source/pytest.log
           run_gui python main.py --self-check --json-report evidence/source/self-check.json 2>&1 | tee evidence/source/self-check.log
           for viewport in 1280x720 1920x1080; do
             for scale in 1 1.5 2; do

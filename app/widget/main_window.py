@@ -1177,7 +1177,7 @@ class AppMainWindow(QMainWindow, UIMainWindow):
 
     def _init_button_state_machine_add_state(self):
         self.button_add_state.setText("新建状态")
-        self.button_add_state.setMinimumWidth(96)
+        self.button_add_state.setMinimumWidth(0)
         self.button_add_state.setMaximumWidth(16777215)
         self.button_add_state.setSizePolicy(
             QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed
@@ -2855,9 +2855,14 @@ class AppMainWindow(QMainWindow, UIMainWindow):
             self.property_source_label.setText("来源：当前内存模型")
             return
         ownership = "可编辑" if source_ref.editable else "只读"
+        visible_source = self.task_center.redactor.redact_text(
+            source_ref.source_uri
+        )
+        if visible_source.lower().startswith("file://"):
+            visible_source = visible_source[7:]
         self.property_source_label.setText(
             "来源：{}\n所有权：{}".format(
-                self.task_center.redactor.redact_text(source_ref.source_uri),
+                visible_source,
                 ownership,
             )
         )
