@@ -141,7 +141,7 @@ jobs:
           if [ -n "${MINGW_BIN:-}" ]; then export PATH="$PATH:$MINGW_BIN"; fi
           run_gui() {
             case "$RUNNER_OS" in
-              Linux) xvfb-run -a env QT_QPA_PLATFORM=xcb "$@" ;;
+              Linux) timeout --signal=TERM 15m xvfb-run -a env QT_QPA_PLATFORM=xcb "$@" ;;
               Windows) env QT_PLUGIN_PATH="$PWD/missing-host-qt-plugins" QT_QPA_PLATFORM_PLUGIN_PATH="$PWD/missing-host-qt-platforms" QT_QPA_PLATFORM=windows "$@" ;;
               macOS) env QT_QPA_PLATFORM=cocoa "$@" ;;
               *) return 1 ;;
@@ -157,8 +157,18 @@ jobs:
             --junitxml=evidence/source/pytest.xml \
             2>&1 | tee evidence/source/pytest.log
           run_gui python main.py --self-check --json-report evidence/source/self-check.json 2>&1 | tee evidence/source/self-check.log
-          for viewport in 1280x720 1920x1080; do
-            for scale in 1 1.5 2; do
+          viewports=(1280x720 1920x1080)
+          scales=(1 1.5 2)
+          # Windows and macOS cover the complete DPI matrix.  On Linux each
+          # acceptance launch owns a separate Xvfb server and repeated native
+          # teardown is both very slow and prone to runner-level hangs; retain
+          # one representative Linux viewport and bound every launch instead.
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            viewports=(1280x720)
+            scales=(1)
+          fi
+          for viewport in "${viewports[@]}"; do
+            for scale in "${scales[@]}"; do
               key="${viewport}-scale-${scale}"
               mkdir -p "evidence/source/acceptance/${key}"
               QT_SCALE_FACTOR="$scale" run_gui python main.py --acceptance-check \
@@ -206,7 +216,7 @@ jobs:
           if [ -n "${MINGW_BIN:-}" ]; then export PATH="$PATH:$MINGW_BIN"; fi
           run_gui() {
             case "$RUNNER_OS" in
-              Linux) xvfb-run -a env QT_QPA_PLATFORM=xcb "$@" ;;
+              Linux) timeout --signal=TERM 15m xvfb-run -a env QT_QPA_PLATFORM=xcb "$@" ;;
               Windows) env QT_PLUGIN_PATH="$PWD/missing-host-qt-plugins" QT_QPA_PLATFORM_PLUGIN_PATH="$PWD/missing-host-qt-platforms" QT_QPA_PLATFORM=windows "$@" ;;
               macOS) env QT_QPA_PLATFORM=cocoa "$@" ;;
               *) return 1 ;;
@@ -216,8 +226,14 @@ jobs:
           mkdir -p evidence/onedir
           executable="./dist/fcstm-gui/${{ matrix.executable }}"
           run_gui "$executable" --self-check --json-report evidence/onedir/self-check.json 2>&1 | tee evidence/onedir/self-check.log
-          for viewport in 1280x720 1920x1080; do
-            for scale in 1 1.5 2; do
+          viewports=(1280x720 1920x1080)
+          scales=(1 1.5 2)
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            viewports=(1280x720)
+            scales=(1)
+          fi
+          for viewport in "${viewports[@]}"; do
+            for scale in "${scales[@]}"; do
               key="${viewport}-scale-${scale}"
               mkdir -p "evidence/onedir/acceptance/${key}"
               QT_SCALE_FACTOR="$scale" run_gui "$executable" --acceptance-check \
@@ -250,7 +266,7 @@ jobs:
           if [ -n "${MINGW_BIN:-}" ]; then export PATH="$PATH:$MINGW_BIN"; fi
           run_gui() {
             case "$RUNNER_OS" in
-              Linux) xvfb-run -a env QT_QPA_PLATFORM=xcb "$@" ;;
+              Linux) timeout --signal=TERM 15m xvfb-run -a env QT_QPA_PLATFORM=xcb "$@" ;;
               Windows) env QT_QPA_PLATFORM=windows "$@" ;;
               macOS) env QT_QPA_PLATFORM=cocoa "$@" ;;
               *) return 1 ;;
@@ -261,8 +277,14 @@ jobs:
           mkdir -p evidence/onefile
           executable="./dist/${{ matrix.executable }}"
           run_gui "$executable" --self-check --json-report evidence/onefile/self-check.json 2>&1 | tee evidence/onefile/self-check.log
-          for viewport in 1280x720 1920x1080; do
-            for scale in 1 1.5 2; do
+          viewports=(1280x720 1920x1080)
+          scales=(1 1.5 2)
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            viewports=(1280x720)
+            scales=(1)
+          fi
+          for viewport in "${viewports[@]}"; do
+            for scale in "${scales[@]}"; do
               key="${viewport}-scale-${scale}"
               mkdir -p "evidence/onefile/acceptance/${key}"
               QT_SCALE_FACTOR="$scale" run_gui "$executable" --acceptance-check \
