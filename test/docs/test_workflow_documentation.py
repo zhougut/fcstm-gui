@@ -190,6 +190,26 @@ def test_full_release_bounds_linux_gui_checks_to_representative_viewport():
     assert workflow.count('for scale in "${scales[@]}"; do') == 3
 
 
+def test_full_release_can_select_a_linux_only_dynamic_matrix():
+    workflow = BUILD_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "description: 'Platforms to build and verify'" in workflow
+    assert "          - linux-only" in workflow
+    assert "        default: all" in workflow
+    assert workflow.count("inputs.target == 'linux-only'") == 2
+    assert workflow.count("include: ${{ fromJSON(") == 2
+    dynamic_lines = [
+        line for line in workflow.splitlines() if "include: ${{ fromJSON(" in line
+    ]
+    assert len(dynamic_lines) == 2
+    for line in dynamic_lines:
+        linux_only_json = line.split("&& '", 1)[1].split("' ||", 1)[0]
+        linux_only_matrix = json.loads(linux_only_json)
+        assert len(linux_only_matrix) == 1
+        assert linux_only_matrix[0]["os"] == "ubuntu-22.04"
+        assert linux_only_matrix[0]["label"] == "linux-x86_64"
+
+
 def test_fast_workflow_is_the_short_windows_linux_gate():
     workflow = FAST_WORKFLOW.read_text(encoding="utf-8")
     assert "    paths:" in workflow
