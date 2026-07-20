@@ -176,6 +176,20 @@ def test_build_workflow_keeps_fresh_products_independent_of_host_toolchains():
     assert 'export PATH="$PATH:$MINGW_BIN"' in coverage_step
 
 
+def test_full_release_bounds_linux_gui_checks_to_representative_viewport():
+    workflow = BUILD_WORKFLOW.read_text(encoding="utf-8")
+
+    assert workflow.count(
+        "Linux) timeout --signal=TERM 15m xvfb-run -a env "
+        'QT_QPA_PLATFORM=xcb "$@" ;;'
+    ) == 3
+    assert workflow.count('if [ "$RUNNER_OS" = "Linux" ]; then') >= 3
+    assert workflow.count("viewports=(1280x720)") == 3
+    assert workflow.count("scales=(1)") == 3
+    assert workflow.count('for viewport in "${viewports[@]}"; do') == 3
+    assert workflow.count('for scale in "${scales[@]}"; do') == 3
+
+
 def test_fast_workflow_is_the_short_windows_linux_gate():
     workflow = FAST_WORKFLOW.read_text(encoding="utf-8")
     assert "    paths:" in workflow
