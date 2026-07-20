@@ -126,6 +126,19 @@ def test_diagnostics_panel_empty_state_and_action_column_fit_compact_width(qtbot
     )
 
 
+def test_diagnostics_filter_and_check_actions_do_not_overlap(qtbot):
+    panel = DiagnosticsPanel()
+    qtbot.addWidget(panel)
+    panel.resize(652, 560)
+    panel.show()
+    qtbot.wait(10)
+
+    intersection = panel.clear_search_button.geometry().intersected(
+        panel.check_button.geometry()
+    )
+    assert intersection.width() <= 1 or intersection.height() <= 1
+
+
 def test_diagnostics_panel_emits_locate_signal_from_button_and_double_click(qtbot):
     panel = DiagnosticsPanel()
     qtbot.addWidget(panel)

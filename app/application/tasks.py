@@ -222,7 +222,9 @@ class PathRedactor:
             ("<HOME>", home),
         ):
             if path:
-                normalized = os.path.normpath(os.path.abspath(os.path.expanduser(path)))
+                normalized = os.path.normpath(
+                    os.path.realpath(os.path.abspath(os.path.expanduser(path)))
+                )
                 roots.append((normalized, marker))
         self._roots = tuple(sorted(roots, key=lambda item: len(item[0]), reverse=True))
 
